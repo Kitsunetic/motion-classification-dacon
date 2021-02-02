@@ -118,7 +118,9 @@ class ResNet(nn.Module):
             nn.Flatten(),
             nn.Linear(self.inchannels, 2048),
             nn.Dropout(0.1),
-            nn.Linear(2048, 61),
+            # nn.Linear(2048, 61), # for total classification
+            nn.Linear(2048, 1),  # for ss only
+            nn.Sigmoid(),
         )
 
     def forward(self, x):

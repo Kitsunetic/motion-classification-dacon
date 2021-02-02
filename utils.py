@@ -94,3 +94,21 @@ class AccuracyMeter:
 
     def __call__(self):
         return self.acc
+
+
+class BinaryAccuracyMeter:
+    def __init__(self):
+        self.correct = 0
+        self.numel = 0
+        self.acc = 0
+
+    def update(self, y, p):
+        pp = torch.round(p)
+        self.correct += (y == pp).sum().item()
+        self.numel += y.shape[0]
+
+        if self.numel > 0:
+            self.acc = self.correct / self.numel
+
+    def __call__(self):
+        return self.acc
