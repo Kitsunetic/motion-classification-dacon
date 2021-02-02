@@ -98,7 +98,7 @@ class ResNet(nn.Module):
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
-            nn.Linear(512, 2048),
+            nn.Linear(self.inchannels, 2048),
             nn.Dropout(0.1),
             nn.Linear(2048, 61),
         )

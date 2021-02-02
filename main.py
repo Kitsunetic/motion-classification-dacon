@@ -1,4 +1,5 @@
 import math
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0201.npz")
-COMMENT = ""
+COMMENT = "resnet50-aug_shift240"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -31,12 +32,33 @@ class QDataset(TensorDataset):
         data = super(QDataset, self).__getitem__(idx)
 
         if len(data) != 1:
-            # TODO augmentation
             x, y = data
+            # TODO augmentation
+            x = self.augmentation(x)
             return x, y
         else:
             # test
             return data
+
+    def augmentation(self, x):
+        # random shift
+        x = self._aug_random_shift(x)
+
+        return x
+
+    @staticmethod
+    def _aug_random_shift(x):
+        """
+        80% 확률로 랜덤하게 왼쪽/오른쪽으로 1~240만큼 shift한다.
+        잘리는 부분은 버리고, 새로운 부분은 0으로 채움.
+        """
+        if random.random() >= 0.8:
+            return x
+
+        dist = random.randint(-240, 240)
+        x = torch.roll(x, dist, dims=1)
+
+        return x
 
 
 class Trainer:
@@ -164,7 +186,7 @@ def main():
 
         model = networks.ResNet50().cuda()
         criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3)
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
