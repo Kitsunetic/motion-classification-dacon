@@ -18,7 +18,7 @@ from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0201.npz")
-COMMENT = "resnet50-aug_shift240"
+COMMENT = "resnet150-aug_shift80_pad0"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -49,16 +49,29 @@ class QDataset(TensorDataset):
     @staticmethod
     def _aug_random_shift(x):
         """
-        80% 확률로 랜덤하게 왼쪽/오른쪽으로 1~240만큼 shift한다.
+        80% 확률로 랜덤하게 왼쪽/오른쪽으로 shift한다.
         잘리는 부분은 버리고, 새로운 부분은 0으로 채움.
+
+        TODO 잘 안됨
         """
-        if random.random() >= 0.8:
+        if random.random() >= 80:
             return x
 
-        dist = random.randint(-240, 240)
+        dist = round(torch.randn(1).item() * 20)
         x = torch.roll(x, dist, dims=1)
+        if dist > 0:
+            x[:, :dist] = 0
+        elif dist < 0:
+            x[:, dist:] = 0
 
         return x
+
+    @staticmethod
+    def _aug_random_crop(x):
+        """
+        TODO 20% 확률로 랜덤한 위치에 1~40 만큼의 공간을 0으로 만들음)
+        """
+        pass
 
 
 class Trainer:
@@ -184,7 +197,7 @@ def main():
         dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
         dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
 
-        model = networks.ResNet50().cuda()
+        model = networks.ResNet152().cuda()
         criterion = nn.CrossEntropyLoss().cuda()
         optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
 

@@ -7,9 +7,9 @@ Activation = nn.ELU
 # TODO repVGG 한번 해보자
 
 
-def cba(inchannels, channels, kernel_size, stride=1, padding=0):
+def cba(inchannels, channels, kernel_size, stride=1, padding=0, dilation=1, groups=1):
     conv = []
-    conv.append(nn.Conv1d(inchannels, channels, kernel_size, stride, padding))
+    conv.append(nn.Conv1d(inchannels, channels, kernel_size, stride, padding, dilation, groups))
     conv.append(nn.BatchNorm1d(channels))
     conv.append(Activation(inplace=True))
     return nn.Sequential(*conv)
@@ -33,7 +33,8 @@ class BasicBlock(nn.Module):
         self.conv2 = None
         if inchannels != channels or stride != 1:
             self.conv2 = nn.Sequential(
-                nn.Conv1d(inchannels, channels, 1, stride=stride, groups=groups), nn.BatchNorm1d(channels)
+                nn.Conv1d(inchannels, channels, 1, stride=stride, groups=groups),
+                nn.BatchNorm1d(channels),
             )
 
     def forward(self, x):
@@ -49,20 +50,34 @@ class BasicBlock(nn.Module):
 
 
 class BottleNeck(nn.Module):
-    expansion = 2
+    expansion = 4
 
     def __init__(self, inchannels, channels, stride=1, groups=1):
         super(BottleNeck, self).__init__()
 
         width = int(channels * (64 / 64.0)) * groups
-        self.conv1 = nn.Sequential(nn.Conv1d(inchannels, width, 1), nn.BatchNorm1d(width))
-        self.conv2 = nn.Sequential(nn.Conv1d(width, width, 3, stride=stride, groups=groups, padding=1), nn.BatchNorm1d(width))
-        self.conv3 = nn.Sequential(nn.Conv1d(width, channels * self.expansion, 1), nn.BatchNorm1d(channels * self.expansion))
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(inchannels, width, 1),
+            nn.BatchNorm1d(width),
+            Activation(),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(width, width, 3, stride=stride, groups=groups, padding=1),
+            nn.BatchNorm1d(width),
+            Activation(),
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv1d(width, channels * self.expansion, 1),
+            nn.BatchNorm1d(channels * self.expansion),
+        )
         self.act = Activation()
 
         self.downsample = None
         if stride != 1 or channels * self.expansion != inchannels:
-            self.downsample = nn.Conv1d(inchannels, channels * self.expansion, 1)
+            self.downsample = nn.Sequential(
+                nn.Conv1d(inchannels, channels * self.expansion, 1, stride=stride),
+                nn.BatchNorm1d(channels * self.expansion),
+            )
 
     def forward(self, x):
         identity = x
@@ -82,18 +97,21 @@ class ResNet(nn.Module):
     def __init__(self, block, layers):
         super(ResNet, self).__init__()
 
-        self.inchannels = 32
-
+        # 18개의 채널은 각각 3개씩 {A가속, G가속, A속, G속, A위치, G위치} 6개로 나눠짐.
+        # 그러므로 embedding conv도 6그룹으로 나눈다.
+        # 이후 각각 나눠서 embedding된걸 합치기 위해서 CNN 층 하나 더 추가
+        self.inchannels = 64  # 6의 배수여야 함
         self.conv = nn.Sequential(
-            nn.Conv1d(18, self.inchannels, 3, padding=1, bias=False),
-            nn.BatchNorm1d(self.inchannels),
-            Activation(),
+            cba(18, 36, 7, 1, 2, groups=6),
+            cba(36, 36, 1, 1, 0),
+            cba(36, 64, 3, 2, 1),
+            nn.AvgPool1d(2),
         )
 
         self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1])
-        self.layer3 = self._make_layer(block, 256, layers[2])
-        self.layer4 = self._make_layer(block, 512, layers[3])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
@@ -138,3 +156,13 @@ class ResNet34(ResNet):
 class ResNet50(ResNet):
     def __init__(self):
         super(ResNet50, self).__init__(BottleNeck, [3, 4, 6, 3])
+
+
+class ResNet101(ResNet):
+    def __init__(self):
+        super().__init__(BottleNeck, [3, 4, 23, 3])
+
+
+class ResNet152(ResNet):
+    def __init__(self):
+        super().__init__(BottleNeck, [3, 8, 36, 3])
