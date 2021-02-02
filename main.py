@@ -6,16 +6,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch_optimizer
+from sklearn.model_selection import StratifiedKFold
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
+import networks
 from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 
-LOGDIR = Path("../log2")
-RESULT_DIR = Path("../results")
-DATA_DIR = Path("../data/M128_50000")
-COMMENT = "M128-50000"
+LOGDIR = Path("log")
+RESULT_DIR = Path("results")
+DATA_PATH = Path("data/0201.npz")
+COMMENT = ""
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -24,46 +26,41 @@ NUM_CPUS = 8
 EPOCHS = 200
 
 
-class NPZDataset(Dataset):
-    def __init__(self, npz_file, is_train=True):
-        super(NPZDataset, self).__init__()
-
-        self.is_train = is_train
-
-        data = np.load(npz_file)
-        if self.is_train:
-            self.X = data["X_train"]
-            self.Y = data["Y_train"]
-        else:
-            self.X = data["X_test"]
-
-    def __len__(self):
-        return len(self.X)
-
+class QDataset(TensorDataset):
     def __getitem__(self, idx):
-        x = torch.tensor(self.X[idx], dtype=torch.float32)
+        data = super(QDataset, self).__getitem__(idx)
 
-        # TODO augmentation
-
-        if self.is_train:
-            y = torch.tensor([self.Y[idx]], dtype=torch.float32)
+        if len(data) != 1:
+            # TODO augmentation
+            x, y = data
             return x, y
         else:
-            return x
+            # test
+            return data
 
 
 class Trainer:
-    def __init__(self, model: nn.Module, criterion: nn.Module, optimizer, writer: SummaryWriter, exname: str, expath: Path):
+    def __init__(
+        self,
+        model: nn.Module,
+        criterion: nn.Module,
+        optimizer,
+        writer: SummaryWriter,
+        exname: str,
+        expath: Path,
+        fold: int,
+    ):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
         self.writer = writer
         self.exname = exname
         self.expath = expath
+        self.fold = fold
 
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
-        self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=3, verbose=True, threshold=1e-8, cooldown=10)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=3, verbose=True, threshold=1e-8, cooldown=2)
         self.best_loss = math.inf
         self.earlystop_cnt = 0
         self.earlystop = False
@@ -79,8 +76,8 @@ class Trainer:
     def train_loop(self, dl):
         self.model.train()
 
-        self.loss, self.acc, self.acc1 = AverageMeter(), AccuracyMeter(), AccuracyMeter(generosity=1)
-        for x, y, k in dl:
+        self.loss, self.acc = AverageMeter(), AccuracyMeter()
+        for x, y in dl:
             y_ = y.cuda()
             p = self.model(x.cuda())
             loss = self.criterion(p, y_)
@@ -90,33 +87,31 @@ class Trainer:
 
             self.loss.update(loss.item())
             self.acc.update(y_, p)
-            self.acc1.update(y_, p)
 
     def valid_loop(self, dl):
         self.model.eval()
 
-        self.val_loss, self.val_acc, self.val_acc1 = AverageMeter(), AccuracyMeter(), AccuracyMeter(generosity=1)
+        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
         with torch.no_grad():
-            for x, y, k in dl:
+            for x, y in dl:
                 y_ = y.cuda()
                 p = self.model(x.cuda())
                 loss = self.criterion(p, y_)
 
                 self.val_loss.update(loss.item())
                 self.val_acc.update(y_, p)
-                self.val_acc1.update(y_, p)
 
     def callback(self, epoch):
         now = datetime.now()
         print(
-            f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}]",
-            f"loss: {self.loss():.6f} acc: {self.acc()*100:.1f}% acc1: {self.acc1()*100:.1f}",
-            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.1f}% val_acc1: {self.val_acc1()*100:.1f}",
+            f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
+            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}%",
+            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%",
         )
 
         # Tensorboard
         loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
-        acc_scalars = {"acc": self.acc(), "acc1": self.acc1(), "val_acc": self.val_acc(), "val_acc1": self.val_acc1()}
+        acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
         self.writer.add_scalars(self.exname + "/loss", loss_scalars, epoch)
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, epoch)
 
@@ -141,17 +136,42 @@ class Trainer:
         self.model.eval()
 
         with torch.no_grad():
-            ps, ys = [], []
-            for x, y, k in dl:
+            ps = []
+            for x in dl:
                 p = self.model(x.cuda()).cpu()
                 ps.append(p)
-                ys.append(y)
 
-            return torch.cat(ps), torch.cat(ys)
+            return torch.cat(ps)
 
 
 def main():
-    pass
+    print(EXPATH)
+    writer = SummaryWriter(LOGDIR)
+
+    data = np.load(DATA_PATH)
+    X_train, Y_train, X_test = data["X_train"], data["Y_train"], data["X_test"]
+    X_train = torch.tensor(X_train, dtype=torch.float32)
+    Y_train = torch.tensor(Y_train, dtype=torch.int64)
+    X_test = torch.tensor(X_test, dtype=torch.float32)
+
+    skf = StratifiedKFold(shuffle=True, random_state=143151)
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
+        ds_train = QDataset(X_train[train_idx], Y_train[train_idx])
+        ds_valid = QDataset(X_train[valid_idx], Y_train[valid_idx])
+        dl_kwargs = dict(batch_size=BATCH_SIZE, num_workers=NUM_CPUS, pin_memory=True)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+
+        model = networks.ResNet50().cuda()
+        criterion = nn.CrossEntropyLoss().cuda()
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3)
+
+        trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
+        trainer.fit(dl_train, dl_valid, EPOCHS)
+
+        # TODO submission 만들기
+
+        break  # TODO 아직 KFold 안함
 
 
 if __name__ == "__main__":

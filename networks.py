@@ -82,10 +82,10 @@ class ResNet(nn.Module):
     def __init__(self, block, layers):
         super(ResNet, self).__init__()
 
-        self.inchannels = 18
+        self.inchannels = 32
 
         self.conv = nn.Sequential(
-            nn.Conv1d(42, self.inchannels, 3, padding=1, bias=False),
+            nn.Conv1d(18, self.inchannels, 3, padding=1, bias=False),
             nn.BatchNorm1d(self.inchannels),
             Activation(),
         )
@@ -99,19 +99,19 @@ class ResNet(nn.Module):
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
             nn.Linear(512, 2048),
-            nn.Dropout(0.2),
-            nn.Linear(2048, 1),
+            nn.Dropout(0.1),
+            nn.Linear(2048, 61),
         )
 
     def forward(self, x):
-        # (B, 6, 7, 48) --> (B, 9, 2, 48)
-        x = x.flatten(1, 2)  # (B, 6, 7, 48) --> (B, 42, 48)
         x = self.conv(x)
+
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.conv_out(x)
+
+        x = self.fc(x)
 
         return x
 
@@ -125,6 +125,16 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
 
-class ResNet15(ResNet):
+class ResNet18(ResNet):
     def __init__(self):
-        super(ResNet15, self).__init__(BasicBlock, [2, 2, 2, 2])
+        super(ResNet18, self).__init__(BasicBlock, [2, 2, 2, 2])
+
+
+class ResNet34(ResNet):
+    def __init__(self):
+        super(ResNet34, self).__init__(BasicBlock, [3, 4, 6, 3])
+
+
+class ResNet50(ResNet):
+    def __init__(self):
+        super(ResNet50, self).__init__(BottleNeck, [3, 4, 6, 3])
