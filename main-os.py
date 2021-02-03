@@ -238,7 +238,7 @@ def main():
 
         model = networks.ResNet152().cuda()
         criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)  # TODO 1e-3??
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3)  # TODO 1e-3??
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
