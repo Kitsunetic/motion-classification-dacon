@@ -101,10 +101,14 @@ class ResNet(nn.Module):
         # 그러므로 embedding conv도 6그룹으로 나눈다.
         # 이후 각각 나눠서 embedding된걸 합치기 위해서 CNN 층 하나 더 추가
         self.inchannels = 64  # 6의 배수여야 함
-        self.conv = nn.Sequential(
+        """self.conv = nn.Sequential(
             cba(18, 36, 7, 1, 2, groups=6),
             cba(36, 36, 1, 1, 0),
             cba(36, 64, 3, 2, 1),
+            nn.AvgPool1d(2),
+        )"""
+        self.conv = nn.Sequential(
+            cba(18, 64, 7, 2, 3),
             nn.AvgPool1d(2),
         )
 
@@ -118,8 +122,8 @@ class ResNet(nn.Module):
             nn.Flatten(),
             nn.Linear(self.inchannels, 2048),
             nn.Dropout(0.1),
-            # nn.Linear(2048, 61), # for total classification
-            nn.Linear(2048, 1),  # for ss only
+            nn.Linear(2048, 61),  # for total classification
+            # nn.Linear(2048, 1),  # for ss only
             nn.Sigmoid(),
         )
 

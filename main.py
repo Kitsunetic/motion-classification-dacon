@@ -20,81 +20,14 @@ from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
-DATA_PATH = Path("data/0201.npz")
-COMMENT = "resnet34-aug_shift50_5_pad0"
+DATA_PATH = Path("data/0203.npz")
+COMMENT = "resnet152"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
 BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 200
-
-CE_WEIGHTS = torch.tensor(
-    [
-        4.27,
-        2.44,
-        2.56,
-        2.23,
-        1.46,
-        2.05,
-        2.13,
-        1.97,
-        0.53,
-        1.38,
-        2.56,
-        2.23,
-        4.27,
-        4.27,
-        2.05,
-        2.05,
-        2.33,
-        1.90,
-        1.09,
-        2.56,
-        1.97,
-        1.90,
-        2.70,
-        2.56,
-        1.46,
-        2.13,
-        0.03,
-        1.51,
-        0.93,
-        2.56,
-        1.46,
-        2.56,
-        2.85,
-        2.56,
-        2.33,
-        1.71,
-        1.83,
-        1.46,
-        2.56,
-        2.56,
-        1.51,
-        2.56,
-        2.56,
-        1.46,
-        2.44,
-        2.33,
-        2.56,
-        1.97,
-        2.05,
-        1.71,
-        1.38,
-        2.13,
-        4.27,
-        3.94,
-        2.23,
-        1.38,
-        1.42,
-        2.56,
-        2.56,
-        2.23,
-        1.07,
-    ],
-    dtype=torch.float32,
-)
 
 
 class QDataset(TensorDataset):
@@ -104,42 +37,42 @@ class QDataset(TensorDataset):
         if len(data) != 1:
             x, y = data
             # TODO augmentation
-            x = self.augmentation(x)
+            x = self.augmentation(x, y)
             return x, y
         else:
             # test
             return data
 
-    def augmentation(self, x):
+    def augmentation(self, x, y):
         # random shift
-        x = self._aug_random_shift(x)
+        x = self._aug_random_shift(x, y)
 
         return x
 
     @staticmethod
-    def _aug_random_shift(x):
+    def _aug_random_shift(x, y):
         """
-        50% 확률로 랜덤하게 왼쪽/오른쪽으로 shift한다.
-        잘리는 부분은 버리고, 새로운 부분은 0으로 채움.
+        일정 확률로 랜덤하게 왼쪽/오른쪽으로 shift한다.
+        원래 양이 많은 26번은 제외
 
         TODO 잘 안됨
         """
-        if random.random() >= 50:
+        if y.item() == 26 or random.random() >= -10:
             return x
 
-        dist = round(torch.randn(1).item() * 5)
+        dist = round(torch.randn(1).item() * 100)
         x = torch.roll(x, dist, dims=1)
-        if dist > 0:
+        """if dist > 0:
             x[:, :dist] = 0
         elif dist < 0:
-            x[:, dist:] = 0
+            x[:, dist:] = 0"""  # no zero fill --> standardization을 잘 해줘서 필요 없어짐
 
         return x
 
     @staticmethod
     def _aug_random_crop(x):
         """
-        TODO 20% 확률로 랜덤한 위치에 1~40 만큼의 공간을 0으로 만들음)
+        TODO 일정 확률로 랜덤한 위치에 1~40 만큼의 공간을 0으로 만들음)
         """
         pass
 
@@ -186,6 +119,7 @@ class Trainer:
         for x, y in dl:
             y_ = y.cuda()
             p = self.model(x.cuda())
+            # print(y_.shape, p.shape)
             loss = self.criterion(p, y_)
             self.optimizer.zero_grad()
             loss.backward()
@@ -316,8 +250,8 @@ def main():
         dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
         dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
 
-        model = networks.ResNet34().cuda()
-        criterion = nn.CrossEntropyLoss(weight=CE_WEIGHTS).cuda()
+        model = networks.ResNet152().cuda()
+        criterion = nn.CrossEntropyLoss().cuda()
         optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
