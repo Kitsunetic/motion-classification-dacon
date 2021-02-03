@@ -7,6 +7,7 @@ from typing import List
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data.dataset import Subset
 import torch_optimizer
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import StratifiedKFold
@@ -22,7 +23,7 @@ from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0203_oversampling")
-COMMENT = "resnet152"
+COMMENT = "resnet152-os"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -209,23 +210,35 @@ def main():
     print(EXPATH)
     writer = SummaryWriter(LOGDIR)
 
-    data = np.load(DATA_PATH)
-    X_train, Y_train, X_test = data["X_train"], data["Y_train"], data["X_test"]
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    Y_train = torch.tensor(Y_train, dtype=torch.int64)
-    X_test = torch.tensor(X_test, dtype=torch.float32)
+    legacy_files, legacy_labels = [], []
+    for i in range(61):
+        for f in (DATA_PATH / "train" / f"{i:02d}").glob("*.npz"):
+            legacy_files.append(f)
+            legacy_labels.append(i)
+    test_files = list((DATA_PATH / "test").glob("*.npz"))
+    ds_test = QDataset(test_files)
 
     skf = StratifiedKFold(shuffle=True, random_state=143151)
-    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
-        ds_train = QDataset(X_train[train_idx], Y_train[train_idx])
-        ds_valid = QDataset(X_train[valid_idx], Y_train[valid_idx])
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(legacy_files, legacy_labels), 1):
+        # 0203 train은 aug된거까지 로드. valid는 원본 데이터(legacy)만 로드
+        train_files = []
+        for i in train_idx:
+            train_files.append(legacy_files[i])
+
+            file_id = legacy_files[i].name[:-4]
+            aug_dir = DATA_PATH / "train_aug" / f"{legacy_labels[i]:02d}"
+            train_files.extend(aug_dir.glob(f"{file_id}_*.npz"))
+        valid_files = [legacy_files[i] for i in valid_idx]
+
+        ds_train = QDataset(train_files)
+        ds_valid = QDataset(valid_files)
         dl_kwargs = dict(batch_size=BATCH_SIZE, num_workers=NUM_CPUS, pin_memory=True)
         dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
         dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
 
         model = networks.ResNet152().cuda()
         criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)  # TODO 1e-3??
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
