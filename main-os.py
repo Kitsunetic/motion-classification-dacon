@@ -22,8 +22,8 @@ from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
-DATA_PATH = Path("data/0203_oversampling")
-COMMENT = "resnet152-os"
+DATA_PATH = Path("data/0203")
+COMMENT = "resnet152-os2"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
