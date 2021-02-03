@@ -18,11 +18,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 import networks
-from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
+from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
-DATA_PATH = Path("data/0203")
+DATA_PATH = Path("data/0203_2")
 COMMENT = "resnet152-os2"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
@@ -78,17 +78,17 @@ class Trainer:
         self.earlystop = False
 
         for epoch in range(1, num_epochs + 1):
-            self.train_loop(dl_train)
-            self.valid_loop(dl_valid)
-            self.callback(epoch)
+            result_train = self.train_loop(dl_train)
+            result_valid = self.valid_loop(dl_valid)
+            self.callback(epoch, result_train, result_valid)
 
             if self.earlystop:
-                self.report(dl_valid)
                 break
 
     def train_loop(self, dl):
         self.model.train()
 
+        ys, ps = [], []
         self.loss, self.acc = AverageMeter(), AccuracyMeter()
         for x, y in dl:
             y_ = y.cuda()
@@ -101,55 +101,14 @@ class Trainer:
 
             self.loss.update(loss.item())
             self.acc.update(y_, p)
+            ys.append(y)
+            ps.append(p.detach().cpu())
+        ys = torch.cat(ys)
+        ps = torch.argmax(torch.cat(ps), dim=1)
+
+        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
 
     def valid_loop(self, dl):
-        self.model.eval()
-
-        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
-        with torch.no_grad():
-            for x, y in dl:
-                y_ = y.cuda()
-                p = self.model(x.cuda())
-                loss = self.criterion(p, y_)
-
-                self.val_loss.update(loss.item())
-                self.val_acc.update(y_, p)
-
-    def callback(self, epoch):
-        now = datetime.now()
-        print(
-            f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
-            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}%",
-            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%",
-        )
-
-        # Tensorboard
-        loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
-        acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
-        self.writer.add_scalars(self.exname + "/loss", loss_scalars, epoch)
-        self.writer.add_scalars(self.exname + "/acc", acc_scalars, epoch)
-
-        # LR scheduler
-        self.scheduler.step(self.val_loss())
-
-        # Early Stop
-        if self.best_loss - self.val_loss() > 1e-8:
-            self.best_loss = self.val_loss()
-            self.earlystop_cnt = 0
-
-            # Save Checkpoint
-            torch.save(self.model.state_dict(), self.expath / "best-ckpt.pth")
-        else:
-            self.earlystop_cnt += 1
-
-        if self.earlystop_cnt > 20:
-            print("[Early Stop] Stop training")
-            self.earlystop = True
-
-    def report(self, dl):
-        # 가장 좋은 checkpoint 로딩
-        ckpt = torch.load(self.expath / "best-ckpt.pth")
-        self.model.load_state_dict(ckpt)
         self.model.eval()
 
         ys, ps = [], []
@@ -164,35 +123,49 @@ class Trainer:
                 self.val_acc.update(y_, p)
                 ys.append(y)
                 ps.append(p.cpu())
+        ys = torch.cat(ys)
+        ps = torch.argmax(torch.cat(ps), dim=1)
 
-        Y = torch.cat(ys).numpy()
-        P = torch.cat(ps)
-        P = torch.argmax(P, dim=1).numpy()
+        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
 
-        # DEBUG: Y, P txt파일로 저장
-        with open(self.expath / "YP.txt", "w") as f:
-            for y, p in zip(Y, P):
-                f.write(f"{y} {p}\r\n")
+    def callback(self, epoch, result_train, result_valid):
+        foldded_epoch = self.fold * 1000 + epoch
 
-        # loss, acc
-        self.writer.add_text(
-            self.exname + "/best",
-            f"loss: {self.val_loss():.6f}, acc: {self.val_acc()*100:.2f}%",
+        now = datetime.now()
+        print(
+            f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
+            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}%",
+            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%",
         )
 
-        # classification report
-        cr = classification_report(Y, P, labels=list(range(61)))
-        cr = cr.replace("\n", "<br>").replace(" ", "&nbsp;")
-        self.writer.add_text(self.exname + "/classification_report", cr)
+        # Tensorboard
+        loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
+        acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
+        self.writer.add_scalars(self.exname + "/loss", loss_scalars, foldded_epoch)
+        self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
 
-        # confusion matrix
-        cm = confusion_matrix(Y, P, labels=list(range(61)))
-        fig = plt.figure(figsize=(24, 20))
-        sns.heatmap(cm, annot=True, fmt="g", cmap="Blues", cbar=False)
-        plt.xlabel("pred")
-        plt.ylabel("real")
-        plt.title(EXNAME)
-        self.writer.add_figure(self.exname + "/confusion_matrix", fig)
+        # Classification Report
+        report_train = classification_report(*result_train)
+        report_valid = classification_report(*result_valid)
+        self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
+        self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
+
+        # LR scheduler
+        self.scheduler.step(self.val_loss())
+
+        # Early Stop
+        if self.best_loss - self.val_loss() > 1e-8:
+            self.best_loss = self.val_loss()
+            self.earlystop_cnt = 0
+
+            # Save Checkpoint
+            torch.save(self.model.state_dict(), self.expath / f"best-ckpt-{self.fold}.pth")
+        else:
+            self.earlystop_cnt += 1
+
+        if self.earlystop_cnt > 20:
+            print(f"[Early Stop:{self.fold}] Stop training")
+            self.earlystop = True
 
     def evaluate(self, dl):
         self.model.eval()

@@ -53,6 +53,10 @@ def generate_experiment_directory(base_dir, comment=None):
     return dirpath, dirpath.name
 
 
+def convert_markdown(text):
+    return text.replace("\n", "<br>").replace(" ", "&nbsp;")
+
+
 class AverageMeter(object):
     """
     AverageMeter, referenced to https://dacon.io/competitions/official/235626/codeshare/1684

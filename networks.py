@@ -26,23 +26,29 @@ class BasicBlock(nn.Module):
             nn.BatchNorm1d(channels),
             Activation(),
             nn.Conv1d(channels, channels, 3, padding=1, groups=groups),
-            nn.BatchNorm1d(channels),
         )
+        self.bn = nn.BatchNorm1d(channels)
         self.act = Activation()
 
-        self.conv2 = None
+        self.downsample = None
         if inchannels != channels or stride != 1:
-            self.conv2 = nn.Sequential(
+            self.downsample = nn.Sequential(
                 nn.Conv1d(inchannels, channels, 1, stride=stride, groups=groups),
                 nn.BatchNorm1d(channels),
             )
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        nn.init.constant_(self.bn.weight, 0)
 
     def forward(self, x):
         identity = x
 
         x = self.conv1(x)
-        if self.conv2 is not None:
-            identity = self.conv2(identity)
+        x = self.bn(x)
+        if self.downsample is not None:
+            identity = self.downsample(identity)
         x += identity
         x = self.act(x)
 
@@ -66,10 +72,8 @@ class BottleNeck(nn.Module):
             nn.BatchNorm1d(width),
             Activation(),
         )
-        self.conv3 = nn.Sequential(
-            nn.Conv1d(width, channels * self.expansion, 1),
-            nn.BatchNorm1d(channels * self.expansion),
-        )
+        self.conv3 = nn.Conv1d(width, channels * self.expansion, 1)
+        self.bn = nn.BatchNorm1d(channels * self.expansion)
         self.act = Activation()
 
         self.downsample = None
@@ -79,12 +83,18 @@ class BottleNeck(nn.Module):
                 nn.BatchNorm1d(channels * self.expansion),
             )
 
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        nn.init.constant_(self.bn.weight, 0)
+
     def forward(self, x):
         identity = x
 
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
+        x = self.bn(x)
         if self.downsample is not None:
             identity = self.downsample(identity)
         x += identity
@@ -108,6 +118,7 @@ class ResNet(nn.Module):
             nn.AvgPool1d(2),
         )"""
         self.conv = nn.Sequential(
+            nn.InstanceNorm1d(18),
             cba(18, 64, 7, 2, 3),
             nn.AvgPool1d(2),
         )
@@ -123,8 +134,8 @@ class ResNet(nn.Module):
             nn.Linear(self.inchannels, 2048),
             nn.Dropout(0.1),
             nn.Linear(2048, 61),  # for total classification
-            # nn.Linear(2048, 1),  # for ss only
-            nn.Sigmoid(),
+            # nn.Linear(2048, 1),
+            # nn.Sigmoid(),  # for ss only
         )
 
     def forward(self, x):
