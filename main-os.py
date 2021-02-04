@@ -22,8 +22,8 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
-DATA_PATH = Path("data/0203_2")
-COMMENT = "resnet152-os2"
+DATA_PATH = Path("data/0203_3")
+COMMENT = "resnet18-os3"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 

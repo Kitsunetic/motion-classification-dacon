@@ -118,7 +118,6 @@ class ResNet(nn.Module):
             nn.AvgPool1d(2),
         )"""
         self.conv = nn.Sequential(
-            nn.InstanceNorm1d(18),
             cba(18, 64, 7, 2, 3),
             nn.AvgPool1d(2),
         )
