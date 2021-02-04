@@ -23,11 +23,11 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0203_3")
-COMMENT = "resnet18-os3"
+COMMENT = "legacyresnet152-os3"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 256
+BATCH_SIZE = 24
 NUM_CPUS = 8
 EPOCHS = 200
 
@@ -145,8 +145,8 @@ class Trainer:
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
 
         # Classification Report
-        report_train = classification_report(*result_train)
-        report_valid = classification_report(*result_valid)
+        report_train = classification_report(*result_train, zero_division=0)
+        report_valid = classification_report(*result_valid, zero_division=0)
         self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
         self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
@@ -209,7 +209,7 @@ def main():
         dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
         dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
 
-        model = networks.ResNet152().cuda()
+        model = networks.LegacyResNet152().cuda()
         criterion = nn.CrossEntropyLoss().cuda()
         optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3)  # TODO 1e-3??
 
@@ -219,6 +219,8 @@ def main():
         # TODO submission 만들기
 
         break  # TODO 아직 KFold 안함
+
+    # TODO submission 파일들 합치기
 
 
 if __name__ == "__main__":
