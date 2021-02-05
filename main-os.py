@@ -23,11 +23,11 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0203_3")
-COMMENT = "legacyresnet152-os3"
+COMMENT = "ResNeSt101-k5-os3"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 24
+BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 200
 
@@ -209,7 +209,8 @@ def main():
         dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
         dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
 
-        model = networks.LegacyResNet152().cuda()
+        # model = networks.LegacyResNet152().cuda()
+        model = networks.resnest101(18, num_classes=61).cuda()
         criterion = nn.CrossEntropyLoss().cuda()
         optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3)  # TODO 1e-3??
 
