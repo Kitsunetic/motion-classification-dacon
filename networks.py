@@ -392,9 +392,9 @@ class ResNeStBottleneck(nn.Module):
             self.conv2 = SplAtConv1d(
                 group_width,
                 group_width,
-                kernel_size=5,
+                kernel_size=3,
                 stride=stride,
-                padding=2 * dilation,
+                padding=1 * dilation,
                 dilation=dilation,
                 groups=cardinality,
                 bias=False,
@@ -405,9 +405,9 @@ class ResNeStBottleneck(nn.Module):
             self.conv2 = nn.Conv1d(
                 group_width,
                 group_width,
-                kernel_size=5,
+                kernel_size=3,
                 stride=stride,
-                padding=2 * dilation,
+                padding=1 * dilation,
                 dilation=dilation,
                 groups=cardinality,
                 bias=False,
@@ -496,16 +496,16 @@ class ResNeSt1d(nn.Module):
 
         if deep_stem:
             self.conv1 = nn.Sequential(
-                nn.Conv1d(inchannels, stem_width, 5, 2, 2, bias=False),
+                nn.Conv1d(inchannels, stem_width, 3, 2, 1, bias=False),
                 norm_layer(stem_width),
                 act(inplace=True),
-                nn.Conv1d(stem_width, stem_width, 5, 1, 2, bias=False),
+                nn.Conv1d(stem_width, stem_width, 3, 1, 1, bias=False),
                 norm_layer(stem_width),
                 act(inplace=True),
-                nn.Conv1d(stem_width, self.inplanes, 5, 1, 2, bias=False),
+                nn.Conv1d(stem_width, self.inplanes, 3, 1, 1, bias=False),
             )
         else:
-            self.conv1 = nn.Conv1d(inchannels, self.inplanes, 9, 2, 4, bias=False)
+            self.conv1 = nn.Conv1d(inchannels, self.inplanes, 7, 2, 3, bias=False)
 
         self.bn1 = norm_layer(self.inplanes)
         self.relu = act(inplace=True)
