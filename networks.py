@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 
 Activation = nn.ELU
@@ -7,12 +8,12 @@ Activation = nn.ELU
 # TODO repVGG 한번 해보자
 
 
-def cba(inchannels, channels, kernel_size, stride=1, padding=0, dilation=1, groups=1):
-    conv = []
-    conv.append(nn.Conv1d(inchannels, channels, kernel_size, stride, padding, dilation, groups))
-    conv.append(nn.BatchNorm1d(channels))
-    conv.append(Activation(inplace=True))
-    return nn.Sequential(*conv)
+def cba(inchannels, channels, kernel_size, stride=1, padding=0):
+    return nn.Sequential(
+        nn.Conv1d(inchannels, channels, kernel_size, stride, padding),
+        nn.BatchNorm1d(channels),
+        Activation(inplace=True),
+    )
 
 
 class BasicBlock(nn.Module):
@@ -252,3 +253,98 @@ class LegacyResNet101(LegacyResNet):
 class LegacyResNet152(LegacyResNet):
     def __init__(self):
         super().__init__(BottleNeck, [3, 8, 36, 3])
+
+
+# ====================================================================
+#                        [2020] ResNeSt
+# ====================================================================
+
+
+class rSoftMax(nn.Module):
+    # https://github.com/zhanghang1989/ResNeSt/blob/master/resnest/torch/splat.py
+    def __init__(self, radix, cardinality):
+        super().__init__()
+        self.radix = radix
+        self.cardinality = cardinality
+
+    def forward(self, x):
+        if self.radix > 1:
+            batch = x.size(0)
+            x = x.view(batch, self.cardinality, self.radix, -1).transpose(1, 2)
+            x = F.softmax(x, dim=1)
+            x = x.reshape(batch, -1)
+        else:
+            x = torch.sigmoid(x)
+        return x
+
+
+class SplAtConv1d(nn.Module):
+    # https://github.com/zhanghang1989/ResNeSt/blob/master/resnest/torch/splat.py
+    def __init__(
+        self,
+        in_channels,
+        channels,
+        kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        bias=True,
+        radix=2,
+        reduction_factor=4,
+        **kwargs,
+    ):
+        super().__init__()
+
+        inter_channels = max(in_channels * radix // reduction_factor, 32)
+        self.radix = radix
+        self.cardinality = groups
+        self.channels = channels
+
+        self.conv = nn.Conv1d(
+            in_channels,
+            channels * radix,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups=groups * radix,
+            bias=bias,
+            **kwargs,
+        )
+        self.bn0 = nn.BatchNorm1d(self.channels * radix)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc1 = nn.Conv1d(self.channels, inter_channels, 1, groups=self.cardinality)
+        self.bn1 = nn.BatchNorm1d(inter_channels)
+        self.fc2 = nn.Conv1d(inter_channels, self.channels * radix, 1, groups=self.cardinality)
+        self.rsoftmax = rSoftMax(radix, self.cardinality)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn0(x)
+        x = self.relu(x)
+
+        batch, rchannel = x.shape[:2]
+        if self.radix > 1:
+            splited = torch.split(x, int(rchannel // self.radix), dim=1)
+            gap = sum(splited)
+        else:
+            gap = x
+        gap = F.adaptive_avg_pool2d(gap, 1)
+        gap = self.fc1(gap)
+        gap = self.bn1(gap)
+        gap = self.relu(gap)
+
+        atten = self.fc2(gap)
+        atten = self.rsoftmax(atten).view(batch, -1, 1, 1)
+
+        if self.radix > 1:
+            attens = torch.split(atten, int(rchannel // self.radix), dim=1)
+            out = sum([att * split for (att, split) in zip(attens, splited)])
+        else:
+            out = atten * x
+
+        return out.contiguous()
+
+
+# TODO https://github.com/zhanghang1989/ResNeSt/blob/master/resnest/torch/resnet.py
