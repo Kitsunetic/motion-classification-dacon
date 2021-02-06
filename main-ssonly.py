@@ -2,6 +2,7 @@ import math
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,13 +22,32 @@ from utils import AccuracyMeter, AverageMeter, BinaryAccuracyMeter, generate_exp
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0201.npz")
-COMMENT = "resnet34-aug_shift50_5_pad0-ssonly"
+COMMENT = "ResNet34-ssonly"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
 BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 200
+
+
+class QDataset(Dataset):
+    def __init__(self, files: List[Path]):
+        super().__init__()
+
+        self.files = files
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        data = np.load(self.files[idx])
+        x = data["x"]
+        y = data["y"]
+        x = torch.tensor(x, dtype=torch.float32)
+        y = torch.tensor(y, dtype=torch.int64)
+
+        return x, y
 
 
 class QDataset(TensorDataset):

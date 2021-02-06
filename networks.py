@@ -4,9 +4,6 @@ import torch.nn.functional as F
 
 Activation = nn.ELU
 
-# TODO resnet으로 함 해보고
-# TODO repVGG 한번 해보자
-
 
 def cba(inchannels, channels, kernel_size, stride=1, padding=0):
     return nn.Sequential(

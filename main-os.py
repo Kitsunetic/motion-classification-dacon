@@ -23,7 +23,7 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_PATH = Path("data/0203_3")
-COMMENT = "ResNeSt101-k5-os3"
+COMMENT = "ResNeSt50-0206_org"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
