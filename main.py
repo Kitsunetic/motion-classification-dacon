@@ -10,6 +10,7 @@ import torch_optimizer
 from sklearn.metrics import classification_report, confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 import networks
 from datasets import D0206_org_v4_4
@@ -18,11 +19,11 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ResNeSt50_fc-0206_org_v4_4"
+COMMENT = "LegacyResNet50_fc-RAdam_1e_4-D0201_v1"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 NUM_CPUS = 8
 EPOCHS = 200
 
@@ -66,19 +67,24 @@ class Trainer:
 
         ys, ps = [], []
         self.loss, self.acc = AverageMeter(), AccuracyMeter()
-        for x, y in dl:
-            y_ = y.cuda()
-            p = self.model(x.cuda())
-            # print(y_.shape, p.shape)
-            loss = self.criterion(p, y_)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        with tqdm(total=len(dl), ncols=100, leave=False) as t:
+            for x, y in dl:
+                y_ = y.cuda()
+                p = self.model(x.cuda())
+                # print(y_.shape, p.shape)
+                loss = self.criterion(p, y_)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
-            self.loss.update(loss.item())
-            self.acc.update(y_, p)
-            ys.append(y)
-            ps.append(p.detach().cpu())
+                self.loss.update(loss.item())
+                self.acc.update(y_, p)
+                ys.append(y)
+                ps.append(p.detach().cpu())
+
+                t.set_postfix_str(f"loss: {loss.item():.6f} acc: {self.acc()*100:.2f}%", refresh=False)
+                t.update()
+
         ys = torch.cat(ys)
         ps = torch.argmax(torch.cat(ps), dim=1)
 
@@ -90,15 +96,20 @@ class Trainer:
         ys, ps = [], []
         self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
         with torch.no_grad():
-            for x, y in dl:
-                y_ = y.cuda()
-                p = self.model(x.cuda())
-                loss = self.criterion(p, y_)
+            with tqdm(total=len(dl), ncols=100, leave=False) as t:
+                for x, y in dl:
+                    y_ = y.cuda()
+                    p = self.model(x.cuda())
+                    loss = self.criterion(p, y_)
 
-                self.val_loss.update(loss.item())
-                self.val_acc.update(y_, p)
-                ys.append(y)
-                ps.append(p.cpu())
+                    self.val_loss.update(loss.item())
+                    self.val_acc.update(y_, p)
+                    ys.append(y)
+                    ps.append(p.cpu())
+
+                    t.set_postfix_str(f"val_loss: {loss.item():.6f} val_acc: {self.val_acc()*100:.2f}%", refresh=False)
+                    t.update()
+
         ys = torch.cat(ys)
         ps = torch.argmax(torch.cat(ps), dim=1)
 
@@ -161,14 +172,14 @@ def main():
 
     dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        # model = networks.LegacyResNet152().cuda()
-        model = nn.Sequential(
-            networks.resnest50(18, num_classes=1000),
+        model = networks.LegacyResNet50().cuda()
+        """model = nn.Sequential(
+            networks.resnest269(18, num_classes=1000),
             # nn.Dropout(0.2),  # dropout은 안하는게 더 좋다는 결론
             nn.Linear(1000, 61),
-        ).cuda()
+        ).cuda()"""
         criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters())
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
