@@ -16,7 +16,7 @@ def cba(inchannels, channels, kernel_size, stride=1, padding=0):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inchannels, channels, stride=1, groups=1):
+    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False):
         super(BasicBlock, self).__init__()
 
         self.conv1 = nn.Sequential(
@@ -38,7 +38,8 @@ class BasicBlock(nn.Module):
         # Zero-initialize the last BN in each residual branch,
         # so that the residual branch starts with zeros, and each residual block behaves like an identity.
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
-        nn.init.constant_(self.bn.weight, 0)
+        if last_gamma:
+            nn.init.constant_(self.bn.weight, 0)
 
     def forward(self, x):
         identity = x
@@ -54,9 +55,9 @@ class BasicBlock(nn.Module):
 
 
 class BottleNeck(nn.Module):
-    expansion = 4
+    expansion = 4  # TODO 2??
 
-    def __init__(self, inchannels, channels, stride=1, groups=1):
+    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False):
         super(BottleNeck, self).__init__()
 
         width = int(channels * (64 / 64.0)) * groups
@@ -84,7 +85,8 @@ class BottleNeck(nn.Module):
         # Zero-initialize the last BN in each residual branch,
         # so that the residual branch starts with zeros, and each residual block behaves like an identity.
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
-        nn.init.constant_(self.bn.weight, 0)
+        if last_gamma:
+            nn.init.constant_(self.bn.weight, 0)
 
     def forward(self, x):
         identity = x
