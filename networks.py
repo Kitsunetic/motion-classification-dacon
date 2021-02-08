@@ -107,24 +107,18 @@ class ResNet(nn.Module):
     def __init__(self, block, layers):
         super(ResNet, self).__init__()
 
-        # 18개의 채널은 각각 3개씩 {A가속, G가속, A속, G속, A위치, G위치} 6개로 나눠짐.
-        # 그러므로 embedding conv도 6그룹으로 나눈다.
-        # 이후 각각 나눠서 embedding된걸 합치기 위해서 CNN 층 하나 더 추가
-        self.inchannels = 64  # 6의 배수여야 함
-        """self.conv = nn.Sequential(
-            cba(18, 36, 7, 1, 2, groups=6),
-            cba(36, 36, 1, 1, 0),
-            cba(36, 64, 3, 2, 1),
-            nn.AvgPool1d(2),
-        )"""
+        self.inchannels = 64
         self.conv = nn.Sequential(
-            cba(18, 64, 7, 2, 3),
-            nn.AvgPool1d(2),
+            nn.Conv1d(18, 18, 1, groups=6),
+            nn.Conv1d(18, 64, 7, 2, 3),
+            nn.BatchNorm1d(64),
+            nn.ReLU(inplace=True),
+            # nn.AvgPool1d(2),
         )
 
         self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer2 = self._make_layer(block, 128, layers[1])  # , stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2])  # , stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.fc = nn.Sequential(
@@ -132,9 +126,7 @@ class ResNet(nn.Module):
             nn.Flatten(),
             nn.Linear(self.inchannels, 2048),
             nn.Dropout(0.1),
-            nn.Linear(2048, 61),  # for total classification
-            # nn.Linear(2048, 1),
-            # nn.Sigmoid(),  # for ss only
+            nn.Linear(2048, 61),
         )
 
     def forward(self, x):
@@ -254,13 +246,11 @@ class LegacyResNet152(LegacyResNet):
         super().__init__(BottleNeck, [3, 8, 36, 3])
 
 
-"""
-====================================================================
+"""====================================================================
                        [2020] ResNeSt
 
 https://github.com/zhanghang1989/ResNeSt.git
-====================================================================
-"""
+===================================================================="""
 
 
 class rSoftMax(nn.Module):
@@ -690,3 +680,10 @@ def resnest269(inchannels, **kwargs):
         **kwargs,
     )
     return model
+
+
+"""====================================================================
+                       [2018] Transformer
+
+- https://tutorials.pytorch.kr/beginner/transformer_tutorial.html
+===================================================================="""

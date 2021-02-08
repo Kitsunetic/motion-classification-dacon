@@ -11,6 +11,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from torch.optim import AdamW
 
 import networks
 from datasets import D0206_org_v4_4
@@ -19,7 +20,7 @@ from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experi
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "LegacyResNet50_fc-RAdam_1e_4-D0201_v1"
+COMMENT = "RResNet50_FC-AdamW-D0206_org_v4_4"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -172,14 +173,14 @@ def main():
 
     dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = networks.LegacyResNet50().cuda()
+        model = networks.ResNet50().cuda()
         """model = nn.Sequential(
             networks.resnest269(18, num_classes=1000),
             # nn.Dropout(0.2),  # dropout은 안하는게 더 좋다는 결론
             nn.Linear(1000, 61),
         ).cuda()"""
         criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
+        optimizer = AdamW(model.parameters(), lr=1e-3)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
