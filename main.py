@@ -15,12 +15,12 @@ from torch.optim import AdamW
 
 import networks
 from datasets import D0206_org_v4_4
-from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experiment_directory
+from utils import AccuracyMeter, AverageMeter, FocalLoss, convert_markdown, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "RResNet50_FC-AdamW-D0206_org_v4_4"
+COMMENT = "RResNet50_FC-AdamW-FocalLoss-D0206_org_v4_4"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -179,7 +179,8 @@ def main():
             # nn.Dropout(0.2),  # dropout은 안하는게 더 좋다는 결론
             nn.Linear(1000, 61),
         ).cuda()"""
-        criterion = nn.CrossEntropyLoss().cuda()
+        # criterion = nn.CrossEntropyLoss().cuda()
+        criterion = FocalLoss(gamma=0.5)
         optimizer = AdamW(model.parameters(), lr=1e-3)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
