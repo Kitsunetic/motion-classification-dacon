@@ -2,23 +2,28 @@ import math
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import List, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch_optimizer
+from sklearn.metrics import classification_report
 from sklearn.model_selection import StratifiedKFold
+from torch import tensor
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 import networks
-from utils import AccuracyMeter, AverageMeter, generate_experiment_directory
+from utils import AccuracyMeter, AverageMeter, convert_markdown, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
-DATA_PATH = Path("data/0201.npz")
-COMMENT = "resnet50-aug_shift240"
+DATA_DIR = Path("data")
+COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma2.0-D0201_v1-revert-B256"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -27,38 +32,62 @@ NUM_CPUS = 8
 EPOCHS = 200
 
 
-class QDataset(TensorDataset):
-    def __getitem__(self, idx):
-        data = super(QDataset, self).__getitem__(idx)
+def random_sin(x, power=0.3):
+    freqs = [100, 150, 200, 300, 600]
+    wave = torch.sin(torch.tensor(list(range(600))) / random.sample(freqs, 1)[0] * math.pi)
+    amplitude = random.random() * power
+    signal = 1 + wave * amplitude
+    return x * signal.reshape(1, -1)
 
-        if len(data) != 1:
-            x, y = data
-            # TODO augmentation
-            x = self.augmentation(x)
-            return x, y
-        else:
-            # test
-            return data
 
-    def augmentation(self, x):
-        # random shift
-        x = self._aug_random_shift(x)
+def random_cos(x, power=0.3):
+    freqs = [100, 150, 200, 300, 600]
+    wave = torch.cos(torch.tensor(list(range(600))) / random.sample(freqs, 1)[0] * math.pi)
+    amplitude = random.random() * power
+    signal = 1 + wave * amplitude
+    return x * signal.reshape(1, -1)
 
-        return x
 
-    @staticmethod
-    def _aug_random_shift(x):
-        """
-        80% 확률로 랜덤하게 왼쪽/오른쪽으로 1~240만큼 shift한다.
-        잘리는 부분은 버리고, 새로운 부분은 0으로 채움.
-        """
-        if random.random() >= 0.8:
-            return x
+def D0201_base(data_dir, batch_size, augc) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader]:
+    data = np.load(data_dir / "0201.npz")
+    X_train = data["X_train"]
+    Y_train = data["Y_train"]
+    X_test = data["X_test"]
 
-        dist = random.randint(-240, 240)
-        x = torch.roll(x, dist, dims=1)
+    X_train = tensor(X_train, dtype=torch.float32)
+    Y_train = tensor(Y_train, dtype=torch.long)
+    X_test = tensor(X_test, dtype=torch.float32)
+    print(X_train.shape, Y_train.shape, X_test.shape)
 
-        return x
+    ds = augc(X_train, Y_train)
+    ds_test = TensorDataset(X_test)
+    dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
+    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
+
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=261342)
+    dl_list = []
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
+        ds_train = Subset(ds, train_idx)
+        ds_valid = Subset(ds, valid_idx)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+        dl_list.append((fold, dl_train, dl_valid))
+
+    return dl_list, dl_test
+
+
+class C0201_v1(TensorDataset):
+    def __getitem__(self, index):
+        x, y = super().__getitem__(index)
+
+        # x = random_shift(x)
+        x = random_sin(x, power=0.7)
+        x = random_cos(x, power=0.7)
+        return x, y
+
+
+def D0201_v1(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader]:
+    return D0201_base(data_dir, batch_size, C0201_v1)
 
 
 class Trainer:
@@ -88,9 +117,9 @@ class Trainer:
         self.earlystop = False
 
         for epoch in range(1, num_epochs + 1):
-            self.train_loop(dl_train)
-            self.valid_loop(dl_valid)
-            self.callback(epoch)
+            result_train = self.train_loop(dl_train)
+            result_valid = self.valid_loop(dl_valid)
+            self.callback(epoch, result_train, result_valid)
 
             if self.earlystop:
                 break
@@ -98,32 +127,58 @@ class Trainer:
     def train_loop(self, dl):
         self.model.train()
 
+        ys, ps = [], []
         self.loss, self.acc = AverageMeter(), AccuracyMeter()
-        for x, y in dl:
-            y_ = y.cuda()
-            p = self.model(x.cuda())
-            loss = self.criterion(p, y_)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-
-            self.loss.update(loss.item())
-            self.acc.update(y_, p)
-
-    def valid_loop(self, dl):
-        self.model.eval()
-
-        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
-        with torch.no_grad():
+        with tqdm(total=len(dl), ncols=100, leave=False) as t:
             for x, y in dl:
                 y_ = y.cuda()
                 p = self.model(x.cuda())
                 loss = self.criterion(p, y_)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
-                self.val_loss.update(loss.item())
-                self.val_acc.update(y_, p)
+                self.loss.update(loss.item())
+                self.acc.update(y_, p)
+                ys.append(y)
+                ps.append(p.detach().cpu())
 
-    def callback(self, epoch):
+                t.set_postfix_str(f"loss: {loss.item():.6f} acc: {self.acc()*100:.2f}%", refresh=False)
+                t.update()
+
+        ys = torch.cat(ys)
+        ps = torch.argmax(torch.cat(ps), dim=1)
+
+        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
+
+    def valid_loop(self, dl):
+        self.model.eval()
+
+        ys, ps = [], []
+        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
+        with torch.no_grad():
+            with tqdm(total=len(dl), ncols=100, leave=False) as t:
+                for x, y in dl:
+                    y_ = y.cuda()
+                    p = self.model(x.cuda())
+                    loss = self.criterion(p, y_)
+
+                    self.val_loss.update(loss.item())
+                    self.val_acc.update(y_, p)
+                    ys.append(y)
+                    ps.append(p.cpu())
+
+                    t.set_postfix_str(f"val_loss: {loss.item():.6f} val_acc: {self.val_acc()*100:.2f}%", refresh=False)
+                    t.update()
+
+        ys = torch.cat(ys)
+        ps = torch.argmax(torch.cat(ps), dim=1)
+
+        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
+
+    def callback(self, epoch, result_train, result_valid):
+        foldded_epoch = self.fold * 1000 + epoch
+
         now = datetime.now()
         print(
             f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
@@ -134,8 +189,14 @@ class Trainer:
         # Tensorboard
         loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
         acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
-        self.writer.add_scalars(self.exname + "/loss", loss_scalars, epoch)
-        self.writer.add_scalars(self.exname + "/acc", acc_scalars, epoch)
+        self.writer.add_scalars(self.exname + "/loss", loss_scalars, foldded_epoch)
+        self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
+
+        # Classification Report
+        report_train = classification_report(*result_train, zero_division=0)
+        report_valid = classification_report(*result_valid, zero_division=0)
+        self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
+        self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
         # LR scheduler
         self.scheduler.step(self.val_loss())
@@ -170,30 +231,18 @@ def main():
     print(EXPATH)
     writer = SummaryWriter(LOGDIR)
 
-    data = np.load(DATA_PATH)
-    X_train, Y_train, X_test = data["X_train"], data["Y_train"], data["X_test"]
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    Y_train = torch.tensor(Y_train, dtype=torch.int64)
-    X_test = torch.tensor(X_test, dtype=torch.float32)
-
-    skf = StratifiedKFold(shuffle=True, random_state=143151)
-    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
-        ds_train = QDataset(X_train[train_idx], Y_train[train_idx])
-        ds_valid = QDataset(X_train[valid_idx], Y_train[valid_idx])
-        dl_kwargs = dict(batch_size=BATCH_SIZE, num_workers=NUM_CPUS, pin_memory=True)
-        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
-        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
-
-        model = networks.ResNet50().cuda()
-        criterion = nn.CrossEntropyLoss().cuda()
-        optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-4)
+    dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
+    for fold, dl_train, dl_valid in dl_list:
+        model = networks.TransformerModel_v3().cuda()
+        criterion = networks.FocalLoss().cuda()
+        optimizer = AdamW(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
 
         # TODO submission 만들기
-
         break  # TODO 아직 KFold 안함
+    # TODO submission 파일들 합치기
 
 
 if __name__ == "__main__":
