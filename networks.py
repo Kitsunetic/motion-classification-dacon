@@ -1,3 +1,4 @@
+from tokenize import group
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -789,7 +790,13 @@ class TransformerModel_v3(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Sequential(
-            SGCNN(18, 128, activation, norm),
+            nn.Conv1d(6, 60, 3, groups=6),
+            norm(60),
+            activation(inplace=True),
+            nn.Conv1d(60, 128, 3),
+            nn.BatchNorm1d(128),
+            activation(inplace=True),
+            # SGCNN(18, 128, activation, norm),
             nn.AvgPool1d(2),
         )
         self.conv2 = nn.Sequential(

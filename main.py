@@ -31,7 +31,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma3.2-D0206_v4_4-B256-KFold10"
+COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma3.2-D0206_v4_4-B256-KFold4-input6-RandomShift"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -174,7 +174,7 @@ class Trainer:
         else:
             self.earlystop_cnt += 1
 
-        if self.earlystop_cnt > 20:
+        if self.earlystop_cnt > 30:
             print(f"[Early Stop:{self.fold}] Stop training")
             self.earlystop = True
 
