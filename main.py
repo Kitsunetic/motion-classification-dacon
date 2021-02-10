@@ -61,6 +61,8 @@ class Trainer:
         self.expath = expath
         self.fold = fold
 
+        self.nllloss = nn.CrossEntropyLoss().cuda()
+
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
         self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=5, verbose=True, threshold=1e-8, cooldown=3)
@@ -101,9 +103,10 @@ class Trainer:
                 t.update()
 
         ys = torch.cat(ys)
-        ps = torch.argmax(torch.cat(ps), dim=1)
+        ps = torch.cat(ps)
+        ps_ = torch.argmax(ps, dim=1)
 
-        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
+        return ys, ps_, ps  # classification_report 때문에 순서 바뀌면 안됨
 
     def valid_loop(self, dl):
         self.model.eval()
@@ -126,29 +129,37 @@ class Trainer:
                     t.update()
 
         ys = torch.cat(ys)
-        ps = torch.argmax(torch.cat(ps), dim=1)
+        ps = torch.cat(ps)
+        ps_ = torch.argmax(ps, dim=1)
 
-        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
+        return ys, ps_, ps  # classification_report 때문에 순서 바뀌면 안됨
 
     def callback(self, epoch, result_train, result_valid):
         foldded_epoch = self.fold * 1000 + epoch
 
+        # LogLoss
+        with torch.no_grad():
+            ll_train = self.nllloss(result_train[2], result_train[0]).item()
+            ll_valid = self.nllloss(result_valid[2], result_valid[0]).item()
+
         now = datetime.now()
         print(
             f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
-            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}%",
-            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%",
+            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}% ll: {ll_train:.6f}",
+            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%  val_ll: {ll_valid:.6f}",
         )
 
         # Tensorboard
         loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
         acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
+        ll_scalars = {"ll": ll_train, "val_ll": ll_valid}
         self.writer.add_scalars(self.exname + "/loss", loss_scalars, foldded_epoch)
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
+        self.writer.add_scalars(self.exname + "/ll", ll_scalars, foldded_epoch)
 
         # Classification Report
-        report_train = classification_report(*result_train, zero_division=0)
-        report_valid = classification_report(*result_valid, zero_division=0)
+        report_train = classification_report(result_train[0], result_train[1], zero_division=0)
+        report_valid = classification_report(result_valid[0], result_valid[1], zero_division=0)
         self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
         self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
@@ -202,8 +213,8 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     dics = []
-    # dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
-    dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
+    # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
         model = networks.TransformerModel_v3().cuda()
         # criterion = ClassBalancedLoss(, 61, beta=0.9999, gamma=2.0)
