@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.modules.activation import ReLU
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 Activation = nn.ELU

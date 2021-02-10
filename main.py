@@ -2,7 +2,9 @@ import math
 import random
 from datetime import datetime
 from pathlib import Path
+from collections import defaultdict
 
+import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
@@ -16,12 +18,19 @@ from torch.optim import AdamW
 
 import networks
 from datasets import D0201_v1, D0206_org_v4_4, D0206_org_v4_5
-from utils import AccuracyMeter, AverageMeter, ClassBalancedLoss, FocalLoss, convert_markdown, generate_experiment_directory
+from utils import (
+    AccuracyMeter,
+    AverageMeter,
+    ClassBalancedLoss,
+    FocalLoss,
+    convert_markdown,
+    generate_experiment_directory,
+    combine_submissions,
+)
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-# COMMENT = "TransformerModel_v4-AdamW-CBLoss_beta0.9999_gamma2.0-D0206_org_v4_4-B256"
 COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma2.0-D0201_v1-B256"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
@@ -29,6 +38,8 @@ EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 200
+
+DO_KFOLD = True
 
 
 class Trainer:
@@ -163,17 +174,34 @@ class Trainer:
 
         with torch.no_grad():
             ps = []
-            for x in dl:
+            for (x,) in dl:
                 p = self.model(x.cuda()).cpu()
                 ps.append(p)
 
             return torch.cat(ps)
+
+    def submission(self, dl):
+        ps = self.evaluate(dl)
+        ps = torch.softmax(ps, dim=1)
+        dic = defaultdict(list)
+        for i, p in enumerate(ps, 3125):
+            dic["id"].append(i)
+            for j, v in enumerate(p):
+                dic[str(j)].append(v.item())
+        dic = pd.DataFrame(dic)
+
+        submission_path = self.expath / f"submission{self.fold}.csv"
+        print("Write submission to", submission_path)
+        dic.to_csv(submission_path, index=False)
+
+        return dic
 
 
 def main():
     print(EXPATH)
     writer = SummaryWriter(LOGDIR)
 
+    dics = []
     # dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
     dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
@@ -184,10 +212,14 @@ def main():
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
+        dics += [trainer.submission(dl_test)]
 
-        # TODO submission 만들기
-        break  # TODO 아직 KFold 안함
-    # TODO submission 파일들 합치기
+        if not DO_KFOLD:
+            break
+
+    # submission 파일들 합치기
+    if DO_KFOLD:
+        combine_submissions(dics, EXPATH)
 
 
 if __name__ == "__main__":

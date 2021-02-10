@@ -1,10 +1,10 @@
 import os
-
 import random
 import re
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,6 +57,23 @@ def generate_experiment_directory(base_dir, comment=None):
 
 def convert_markdown(text):
     return text.replace("\n", "<br>").replace(" ", "&nbsp;")
+
+
+def combine_submissions(dics, expath=None):
+    tdic = {"id": dics[0]["id"].to_list()}
+
+    vdic = np.zeros((len(dics[0]), 61), dtype=np.float32)
+    for dic in dics:
+        vdic += dic.to_numpy()[:, 1:]
+    vdic /= len(dics)
+    for i in range(61):
+        tdic[str(i)] = vdic[:, i].tolist()
+
+    tdic = pd.DataFrame(tdic)
+    if expath is not None:
+        dic.to_csv(Path(expath) / "submission-kfold.csv", index=False)
+
+    return tdic
 
 
 class AverageMeter(object):
