@@ -1,20 +1,20 @@
 import math
 import random
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from collections import defaultdict
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch_optimizer
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, log_loss
+from torch.nn.utils.clip_grad import clip_grad_norm_
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
-from torch.nn.utils.clip_grad import clip_grad_norm_
 from tqdm import tqdm
-from torch.optim import AdamW
 
 import networks
 from datasets import D0201_v1, D0206_org_v4_4, D0206_org_v4_5
@@ -23,9 +23,9 @@ from utils import (
     AverageMeter,
     ClassBalancedLoss,
     FocalLoss,
+    combine_submissions,
     convert_markdown,
     generate_experiment_directory,
-    combine_submissions,
 )
 
 LOGDIR = Path("log")
@@ -60,8 +60,6 @@ class Trainer:
         self.exname = exname
         self.expath = expath
         self.fold = fold
-
-        self.nllloss = nn.CrossEntropyLoss().cuda()
 
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
@@ -139,8 +137,8 @@ class Trainer:
 
         # LogLoss
         with torch.no_grad():
-            ll_train = self.nllloss(result_train[2], result_train[0]).item()
-            ll_valid = self.nllloss(result_valid[2], result_valid[0]).item()
+            ll_train = log_loss(result_train[0], result_train[2])
+            ll_valid = log_loss(result_valid[0], result_valid[2])
 
         now = datetime.now()
         print(
@@ -218,7 +216,7 @@ def main():
     for fold, dl_train, dl_valid in dl_list:
         model = networks.TransformerModel_v3().cuda()
         # criterion = ClassBalancedLoss(, 61, beta=0.9999, gamma=2.0)
-        criterion = FocalLoss()
+        criterion = FocalLoss()  # TODO gamma 키워서?
         optimizer = AdamW(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
