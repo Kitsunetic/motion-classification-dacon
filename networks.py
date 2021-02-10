@@ -18,23 +18,23 @@ def cba(inchannels, channels, kernel_size, stride=1, padding=0):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False, norm=nn.BatchNorm1d):
+    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False, act=nn.ReLU, norm=nn.BatchNorm1d):
         super(BasicBlock, self).__init__()
 
         self.conv1 = nn.Sequential(
             nn.Conv1d(inchannels, channels, 3, stride=stride, padding=1, groups=groups),
-            nn.BatchNorm1d(channels),
-            nn.ReLU(inplace=True),
+            norm(channels),
+            act(inplace=True),
             nn.Conv1d(channels, channels, 3, padding=1, groups=groups),
         )
-        self.bn = nn.BatchNorm1d(channels)
-        self.act = nn.ReLU(inplace=True)
+        self.bn = norm(channels)
+        self.act = act(inplace=True)
 
         self.downsample = None
         if inchannels != channels or stride != 1:
             self.downsample = nn.Sequential(
                 nn.Conv1d(inchannels, channels, 1, stride=stride, groups=groups),
-                nn.BatchNorm1d(channels),
+                norm(channels),
             )
 
         # Zero-initialize the last BN in each residual branch,
@@ -881,4 +881,57 @@ class TransformerModel_v4(nn.Module):
         return x
 
 
-# TODO CBLoss
+class TransformerModel_v4(nn.Module):
+    def __init__(self, act=nn.ELU, norm=nn.InstanceNorm1d):
+        super().__init__()
+
+        self.conv1s = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv1d(1, 12, 7, 2, padding=3),
+                    nn.InstanceNorm1d(12),
+                )
+                for _ in range(6)
+            ]
+        )
+        self.elayer1 = nn.Sequential(BasicBlock(12 * 6, 128, act=act), BasicBlock(128, 128, act=act))
+        self.elayer2 = nn.Sequential(BasicBlock(128, 256, act=act), BasicBlock(256, 256, act=act))
+        self.elayer3 = nn.Sequential(BasicBlock(256, 512, stride=2, act=act), nn.AvgPool1d(2))
+        self.elayer4 = nn.Sequential(BasicBlock(512, 1024, stride=2, act=act), nn.AvgPool1d(2))
+
+        encoder_layer = TransformerEncoderLayer(
+            d_model=1024,
+            nhead=8,
+            dim_feedforward=2048,
+            dropout=0.1,
+            activation="relu",
+        )
+        self.encoder = TransformerEncoder(encoder_layer, 8)
+
+        self.decoder = BasicBlock(1024, 2048, act=act)
+        self.fc = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Dropout(p=0.05),
+            nn.Linear(2048, 1024),
+            act(inplace=True),
+            nn.Dropout(p=0.05),
+            nn.Linear(1024, 61),
+        )
+
+    def forward(self, x):
+        xs = [self.conv1s[i](x[:, i : i + 1]) for i in range(6)]
+        x = torch.cat(xs, dim=1)
+        x = self.elayer1(x)
+        x = self.elayer2(x)
+        x = self.elayer3(x)
+        x = self.elayer4(x)
+
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = x.transpose(1, 2)
+
+        x = self.decoder(x)
+        x = self.fc(x)
+
+        return x

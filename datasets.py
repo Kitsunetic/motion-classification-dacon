@@ -299,3 +299,45 @@ class C0201_v1(TensorDataset):
 
 def D0201_v1(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader]:
     return D0201_base(data_dir, batch_size, C0201_v1)
+
+
+class C0210(TensorDataset):
+    def __getitem__(self, index):
+        x, y = super().__getitem__(index)
+
+        x = random_shift(x)
+        x = random_sin(x, power=0.7)
+        x = random_cos(x, power=0.7)
+        return x, y
+
+
+def D0210(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
+    data = np.load(data_dir / "0201.npz")
+    X_train = data["X_train"][:, :6]
+    Y_train = data["Y_train"]
+    X_test = data["X_test"][:, :6]
+
+    X_train = tensor(X_train, dtype=torch.float32)
+    Y_train = tensor(Y_train, dtype=torch.long)
+    X_test = tensor(X_test, dtype=torch.float32)
+    print(X_train.shape, Y_train.shape, X_test.shape)
+
+    # samples_per_cls
+    samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
+    print(samples_per_cls)
+
+    ds = C0210(X_train, Y_train)
+    ds_test = TensorDataset(X_test)
+    dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
+    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
+
+    skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=261342)
+    dl_list = []
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
+        ds_train = Subset(ds, train_idx)
+        ds_valid = Subset(ds, valid_idx)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+        dl_list.append((fold, dl_train, dl_valid))
+
+    return dl_list, dl_test, samples_per_cls

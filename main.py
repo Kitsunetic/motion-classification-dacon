@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import networks
-from datasets import D0201_v1, D0206_org_v4_4, D0206_org_v4_5
+from datasets import C0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0210
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -31,11 +31,11 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma3.2-D0206_v4_4-B256-KFold4-input6-RandomShift"
+COMMENT = "TransformerModel_v4-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold4-input6"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 256
+BATCH_SIZE = 120
 NUM_CPUS = 8
 EPOCHS = 200
 
@@ -211,12 +211,12 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     dics = []
-    dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = networks.TransformerModel_v3().cuda()
-        # criterion = ClassBalancedLoss(, 61, beta=0.9999, gamma=2.0)
-        criterion = FocalLoss(gamma=3.2)  # TODO gamma 키워서?
+        model = networks.TransformerModel_v4().cuda()
+        criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.99, gamma=3.2)
+        criterion = FocalLoss(gamma=3.2)
         optimizer = AdamW(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
