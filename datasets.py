@@ -275,7 +275,7 @@ def D0201_base(data_dir, batch_size, augc) -> Tuple[List[Tuple[int, DataLoader, 
     dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
 
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=261342)
+    skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=261342)
     dl_list = []
     for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
         ds_train = Subset(ds, train_idx)

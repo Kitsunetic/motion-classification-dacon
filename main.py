@@ -31,7 +31,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma2.0-D0201_v1-B256"
+COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma3.2-D0206_v4_4-B256-KFold10"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -137,8 +137,8 @@ class Trainer:
 
         # LogLoss
         with torch.no_grad():
-            ll_train = log_loss(result_train[0], result_train[2])
-            ll_valid = log_loss(result_valid[0], result_valid[2])
+            ll_train = log_loss(result_train[0], torch.softmax(result_train[2], dim=1))
+            ll_valid = log_loss(result_valid[0], torch.softmax(result_valid[2], dim=1))
 
         now = datetime.now()
         print(
@@ -216,7 +216,7 @@ def main():
     for fold, dl_train, dl_valid in dl_list:
         model = networks.TransformerModel_v3().cuda()
         # criterion = ClassBalancedLoss(, 61, beta=0.9999, gamma=2.0)
-        criterion = FocalLoss()  # TODO gamma 키워서?
+        criterion = FocalLoss(gamma=3.2)  # TODO gamma 키워서?
         optimizer = AdamW(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
