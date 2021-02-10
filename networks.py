@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.activation import ReLU
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 Activation = nn.ELU
 
@@ -16,17 +18,17 @@ def cba(inchannels, channels, kernel_size, stride=1, padding=0):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False):
+    def __init__(self, inchannels, channels, stride=1, groups=1, last_gamma=False, norm=nn.BatchNorm1d):
         super(BasicBlock, self).__init__()
 
         self.conv1 = nn.Sequential(
             nn.Conv1d(inchannels, channels, 3, stride=stride, padding=1, groups=groups),
             nn.BatchNorm1d(channels),
-            Activation(),
+            nn.ReLU(inplace=True),
             nn.Conv1d(channels, channels, 3, padding=1, groups=groups),
         )
         self.bn = nn.BatchNorm1d(channels)
-        self.act = Activation()
+        self.act = nn.ReLU(inplace=True)
 
         self.downsample = None
         if inchannels != channels or stride != 1:
@@ -682,8 +684,195 @@ def resnest269(inchannels, **kwargs):
     return model
 
 
+class SGCNN(nn.Module):
+    def __init__(self, in_channels, channels, activation, norm):
+        assert in_channels % 3 == 0
+        super().__init__()
+
+        self.convs = [
+            nn.Sequential(
+                nn.Conv1d(in_channels // 3, in_channels, 9),
+                norm(in_channels),
+            )
+            for _ in range(3)
+        ]
+        self.convs = nn.ModuleList(self.convs)
+        self.conv2 = nn.Sequential(
+            activation(inplace=True),
+            nn.Conv1d(in_channels * 3, channels, 9),
+            norm(channels),
+            activation(inplace=True),
+        )
+
+    def forward(self, x):
+        xs = torch.split(x, split_size_or_sections=6, dim=1)
+        xt = []
+        for i in range(3):
+            xt.append(self.convs[i](xs[i]))
+        x = torch.cat(xt, dim=1)
+        x = self.conv2(x)
+
+        return x
+
+
 """====================================================================
                        [2018] Transformer
 
 - https://tutorials.pytorch.kr/beginner/transformer_tutorial.html
 ===================================================================="""
+
+
+class TransformerModel_v1(nn.Module):
+    def __init__(self, activation=nn.ReLU, norm=nn.InstanceNorm1d):
+        super().__init__()
+
+        self.conv1 = SGCNN(18, 128, activation, norm)
+        encoder_layer = TransformerEncoderLayer(
+            d_model=128,
+            nhead=8,
+            dropout=0.2,
+            activation="relu",
+        )
+        self.encoder = TransformerEncoder(encoder_layer, 2)
+        self.decoder = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(584 * 128, 2048),
+            nn.Dropout(p=0.2),
+            nn.Linear(2048, 61),
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = self.decoder(x)
+
+        return x
+
+
+class TransformerModel_v2(nn.Module):
+    def __init__(self, activation=nn.ReLU, norm=nn.InstanceNorm1d):
+        super().__init__()
+
+        self.conv1 = SGCNN(18, 128, activation, norm)
+        encoder_layer = TransformerEncoderLayer(
+            d_model=128,
+            nhead=8,
+            dropout=0.2,
+            activation="relu",
+        )
+        self.encoder = TransformerEncoder(encoder_layer, 2)
+        self.decoder = nn.Sequential(
+            nn.Conv1d(128, 512, 5, 2),
+            nn.BatchNorm1d(512),
+            activation(inplace=True),
+            nn.AvgPool1d(2),
+            nn.Conv1d(512, 1024, 5, 2),
+            nn.BatchNorm1d(1024),
+            activation(inplace=True),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(1024, 61),
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = x.transpose(1, 2)
+        x = self.decoder(x)
+
+        return x
+
+
+class TransformerModel_v3(nn.Module):
+    def __init__(self, activation=nn.ReLU, norm=nn.InstanceNorm1d):
+        super().__init__()
+
+        self.conv1 = nn.Sequential(
+            SGCNN(18, 128, activation, norm),
+            nn.AvgPool1d(2),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(128, 256, 3),
+            nn.BatchNorm1d(256),
+            activation(inplace=True),
+            nn.Conv1d(256, 512, 3),
+            nn.BatchNorm1d(512),
+            activation(inplace=True),
+            nn.AvgPool1d(2),
+        )
+        encoder_layer = TransformerEncoderLayer(
+            d_model=512,
+            nhead=8,
+            dropout=0.2,
+            activation="relu",
+        )
+        self.encoder = TransformerEncoder(encoder_layer, num_layers=6)
+        self.decoder = nn.Sequential(
+            nn.Conv1d(512, 1024, 3),
+            nn.BatchNorm1d(1024),
+            activation(inplace=True),
+            nn.AvgPool1d(2),
+            nn.Conv1d(1024, 2048, 3),
+            nn.BatchNorm1d(2048),
+            activation(inplace=True),
+        )
+        self.fc = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Dropout(0.1),
+            nn.Linear(2048, 1024),
+            nn.Dropout(0.1),
+            nn.Linear(1024, 61),
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = x.transpose(1, 2)
+        x = self.decoder(x)
+        x = self.fc(x)
+
+        return x
+
+
+class TransformerModel_v4(nn.Module):
+    def __init__(self, activation=nn.ReLU, norm=nn.InstanceNorm1d):
+        super().__init__()
+
+        self.conv1 = nn.Sequential(
+            SGCNN(18, 128, activation, norm),
+            BasicBlock(128, 256, stride=2),
+            BasicBlock(256, 512, stride=2),
+            BasicBlock(512, 512, stride=2),
+        )
+        encoder_layer = TransformerEncoderLayer(
+            d_model=512,
+            nhead=8,
+            dropout=0.2,
+            activation="relu",
+        )
+        self.encoder = TransformerEncoder(encoder_layer, 6)
+        self.decoder = nn.Sequential(
+            BasicBlock(512, 1024, stride=2),
+            BasicBlock(1024, 2048, stride=2),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(2048, 1024),
+            nn.Linear(1024, 61),
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = x.transpose(1, 2)
+        x = self.encoder(x)
+        x = x.transpose(1, 2)
+        x = self.decoder(x)
+
+        return x
+
+
+# TODO CBLoss

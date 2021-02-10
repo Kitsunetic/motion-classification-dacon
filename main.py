@@ -10,21 +10,23 @@ import torch_optimizer
 from sklearn.metrics import classification_report, confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
+from torch.nn.utils.clip_grad import clip_grad_norm_
 from tqdm import tqdm
 from torch.optim import AdamW
 
 import networks
-from datasets import D0206_org_v4_4
-from utils import AccuracyMeter, AverageMeter, FocalLoss, convert_markdown, generate_experiment_directory
+from datasets import D0201_v1, D0206_org_v4_4, D0206_org_v4_5
+from utils import AccuracyMeter, AverageMeter, ClassBalancedLoss, FocalLoss, convert_markdown, generate_experiment_directory
 
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "RResNet50_FC-AdamW-FocalLoss_g1.0-D0206_org_v4_4"
+# COMMENT = "TransformerModel_v4-AdamW-CBLoss_beta0.9999_gamma2.0-D0206_org_v4_4-B256"
+COMMENT = "TransformerModel_v4-AdamW-FocalLoss_gamma2.0-D0201_v1-B256"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 200
 
@@ -76,6 +78,7 @@ class Trainer:
                 loss = self.criterion(p, y_)
                 self.optimizer.zero_grad()
                 loss.backward()
+                # clip_grad_norm_(self.model.parameters(), 0.5)
                 self.optimizer.step()
 
                 self.loss.update(loss.item())
@@ -171,17 +174,13 @@ def main():
     print(EXPATH)
     writer = SummaryWriter(LOGDIR)
 
-    dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
+    # dl_list, dl_test = D0206_org_v4_4(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = networks.ResNet50().cuda()
-        """model = nn.Sequential(
-            networks.resnest269(18, num_classes=1000),
-            # nn.Dropout(0.2),  # dropout은 안하는게 더 좋다는 결론
-            nn.Linear(1000, 61),
-        ).cuda()"""
-        # criterion = nn.CrossEntropyLoss().cuda()
-        criterion = FocalLoss(gamma=1.0)
-        optimizer = AdamW(model.parameters(), lr=1e-3)
+        model = networks.TransformerModel_v3().cuda()
+        # criterion = ClassBalancedLoss(, 61, beta=0.9999, gamma=2.0)
+        criterion = FocalLoss()
+        optimizer = AdamW(model.parameters(), lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
