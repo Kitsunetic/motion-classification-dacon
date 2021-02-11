@@ -31,7 +31,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "TransformerModel_v4-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold4-input6"
+COMMENT = "ECATF-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold4-input6"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -199,7 +199,7 @@ class Trainer:
                 dic[str(j)].append(v.item())
         dic = pd.DataFrame(dic)
 
-        submission_path = self.expath / f"submission{self.fold}.csv"
+        submission_path = self.expath / f"submission-{self.exname}-{self.fold}.csv"
         print("Write submission to", submission_path)
         dic.to_csv(submission_path, index=False)
 
@@ -214,7 +214,7 @@ def main():
     dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = networks.TransformerModel_v4().cuda()
+        model = networks.ECATF().cuda()
         criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.99, gamma=3.2)
         criterion = FocalLoss(gamma=3.2)
         optimizer = AdamW(model.parameters(), lr=1e-4)

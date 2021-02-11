@@ -71,7 +71,7 @@ def combine_submissions(dics, expath=None):
 
     tdic = pd.DataFrame(tdic)
     if expath is not None:
-        dic.to_csv(Path(expath) / "submission-kfold.csv", index=False)
+        dic.to_csv(Path(expath) / "submission-{self.exname}.csv", index=False)
 
     return tdic
 
