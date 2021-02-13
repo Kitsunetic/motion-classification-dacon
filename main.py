@@ -16,8 +16,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-import networks
-from datasets import C0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0210
+import networks as ww
+from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -31,15 +31,16 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold4-input6"
+COMMENT = "ECATF-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
 BATCH_SIZE = 120
 NUM_CPUS = 8
-EPOCHS = 200
+EPOCHS = 100
 
 DO_KFOLD = True
+N_TTA = 20
 
 
 class Trainer:
@@ -65,16 +66,11 @@ class Trainer:
         self.num_epochs = num_epochs
         self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=5, verbose=True, threshold=1e-8, cooldown=3)
         self.best_loss = math.inf
-        self.earlystop_cnt = 0
-        self.earlystop = False
 
         for epoch in range(1, num_epochs + 1):
             result_train = self.train_loop(dl_train)
             result_valid = self.valid_loop(dl_valid)
             self.callback(epoch, result_train, result_valid)
-
-            if self.earlystop:
-                break
 
     def train_loop(self, dl):
         self.model.train()
@@ -83,14 +79,22 @@ class Trainer:
         self.loss, self.acc = AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl), ncols=100, leave=False) as t:
             for x, y in dl:
-                y_ = y.cuda()
-                p = self.model(x.cuda())
+                x_, y_ = x.cuda(), y.cuda()
+                p = self.model(x_)
                 # print(y_.shape, p.shape)
                 loss = self.criterion(p, y_)
-                self.optimizer.zero_grad()
+
+                # Common Optimizer
+                """self.optimizer.zero_grad()
                 loss.backward()
                 # clip_grad_norm_(self.model.parameters(), 0.5)
-                self.optimizer.step()
+                self.optimizer.step()"""
+
+                # SAM
+                loss.backward()
+                self.optimizer.first_step(zero_grad=True)
+                self.criterion(self.model(x_), y_).backward()
+                self.optimizer.second_step(zero_grad=True)
 
                 self.loss.update(loss.item())
                 self.acc.update(y_, p)
@@ -102,96 +106,96 @@ class Trainer:
 
         ys = torch.cat(ys)
         ps = torch.cat(ps)
-        ps_ = torch.argmax(ps, dim=1)
+        self.loss = self.loss()
+        self.acc = self.acc()
 
-        return ys, ps_, ps  # classification_report 때문에 순서 바뀌면 안됨
+        return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
 
+    @torch.no_grad()
     def valid_loop(self, dl):
         self.model.eval()
 
-        ys, ps = [], []
-        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
-        with torch.no_grad():
-            with tqdm(total=len(dl), ncols=100, leave=False) as t:
+        pss = []
+        with tqdm(total=len(dl) * N_TTA, ncols=100, leave=False) as t:
+            for tta in range(N_TTA):
+                ys, ps = [], []
                 for x, y in dl:
-                    y_ = y.cuda()
-                    p = self.model(x.cuda())
-                    loss = self.criterion(p, y_)
-
-                    self.val_loss.update(loss.item())
-                    self.val_acc.update(y_, p)
+                    p = self.model(x.cuda()).cpu()
                     ys.append(y)
-                    ps.append(p.cpu())
-
-                    t.set_postfix_str(f"val_loss: {loss.item():.6f} val_acc: {self.val_acc()*100:.2f}%", refresh=False)
+                    ps.append(p)
                     t.update()
 
+                ps = torch.cat(ps)
+                pss.append(ps)
+
         ys = torch.cat(ys)
-        ps = torch.cat(ps)
-        ps_ = torch.argmax(ps, dim=1)
+        ps = torch.stack(pss).mean(dim=0)
 
-        return ys, ps_, ps  # classification_report 때문에 순서 바뀌면 안됨
+        self.val_loss = self.criterion(ps, ys)
+        self.val_acc = (torch.argmax(ps, dim=1) == ys).sum().item() / len(ys)
 
+        return ys, ps
+
+    @torch.no_grad()
     def callback(self, epoch, result_train, result_valid):
         foldded_epoch = self.fold * 1000 + epoch
+        ys_train, ps_train = result_train
+        ys_valid, ps_valid = result_valid
 
         # LogLoss
-        with torch.no_grad():
-            ll_train = log_loss(result_train[0], torch.softmax(result_train[2], dim=1))
-            ll_valid = log_loss(result_valid[0], torch.softmax(result_valid[2], dim=1))
+        ll_train = log_loss(ys_train, torch.softmax(ps_train, dim=1))
+        ll_valid = log_loss(ys_valid, torch.softmax(ps_valid, dim=1))
 
         now = datetime.now()
         print(
             f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
-            f"loss: {self.loss():.6f} acc: {self.acc()*100:.2f}% ll: {ll_train:.6f}",
-            f"val_loss: {self.val_loss():.6f} val_acc: {self.val_acc()*100:.2f}%  val_ll: {ll_valid:.6f}",
+            f"loss: {self.loss:.6f} acc: {self.acc*100:.2f}% ll: {ll_train:.6f}",
+            f"val_loss: {self.val_loss:.6f} val_acc: {self.val_acc*100:.2f}%  val_ll: {ll_valid:.6f}",
         )
 
         # Tensorboard
-        loss_scalars = {"loss": self.loss(), "val_loss": self.val_loss()}
-        acc_scalars = {"acc": self.acc(), "val_acc": self.val_acc()}
+        loss_scalars = {"loss": self.loss, "val_loss": self.val_loss}
+        acc_scalars = {"acc": self.acc, "val_acc": self.val_acc}
         ll_scalars = {"ll": ll_train, "val_ll": ll_valid}
         self.writer.add_scalars(self.exname + "/loss", loss_scalars, foldded_epoch)
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
         self.writer.add_scalars(self.exname + "/ll", ll_scalars, foldded_epoch)
 
         # Classification Report
-        report_train = classification_report(result_train[0], result_train[1], zero_division=0)
-        report_valid = classification_report(result_valid[0], result_valid[1], zero_division=0)
+        report_train = classification_report(ys_train, torch.argmax(ps_train, dim=1), zero_division=0)
+        report_valid = classification_report(ys_valid, torch.argmax(ps_valid, dim=1), zero_division=0)
         self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
         self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
         # LR scheduler
-        self.scheduler.step(self.val_loss())
+        self.scheduler.step(self.val_loss)
 
         # Early Stop
-        if self.best_loss - self.val_loss() > 1e-8:
-            self.best_loss = self.val_loss()
-            self.earlystop_cnt = 0
+        if self.best_loss - self.val_loss > 1e-8:
+            self.best_loss = self.val_loss
 
             # Save Checkpoint
             torch.save(self.model.state_dict(), self.expath / f"best-ckpt-{self.fold}.pth")
-        else:
-            self.earlystop_cnt += 1
 
-        if self.earlystop_cnt > 30:
-            print(f"[Early Stop:{self.fold}] Stop training")
-            self.earlystop = True
-
+    @torch.no_grad()
     def evaluate(self, dl):
         self.model.eval()
 
-        with torch.no_grad():
-            ps = []
-            for (x,) in dl:
-                p = self.model(x.cuda()).cpu()
-                ps.append(p)
+        ps = []
+        for (x,) in dl:
+            p = self.model(x.cuda()).cpu()
+            ps.append(p)
 
-            return torch.cat(ps)
+        return torch.cat(ps)
 
+    @torch.no_grad()
     def submission(self, dl):
-        ps = self.evaluate(dl)
-        ps = torch.softmax(ps, dim=1)
+        pss = []
+        for _ in range(N_TTA):
+            pss.append(self.evaluate(dl))
+        ps = torch.stack(pss)
+        ps = torch.softmax(ps, dim=2).mean(dim=0)
+
         dic = defaultdict(list)
         for i, p in enumerate(ps, 3125):
             dic["id"].append(i)
@@ -203,32 +207,33 @@ class Trainer:
         print("Write submission to", submission_path)
         dic.to_csv(submission_path, index=False)
 
-        return dic
+        return ps
 
 
 def main():
     print(EXPATH)
     writer = SummaryWriter(LOGDIR)
 
-    dics = []
+    pss = []
     dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = networks.ECATF().cuda()
+        model = ww.ECATF().cuda()
         criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.99, gamma=3.2)
         criterion = FocalLoss(gamma=3.2)
-        optimizer = AdamW(model.parameters(), lr=1e-4)
+        # optimizer = AdamW(model.parameters(), lr=1e-4)
+        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
-        dics += [trainer.submission(dl_test)]
+        pss += [trainer.submission(dl_test)]
 
         if not DO_KFOLD:
             break
 
     # submission 파일들 합치기
     if DO_KFOLD:
-        combine_submissions(dics, EXPATH)
+        combine_submissions(pss, EXPATH)
 
 
 if __name__ == "__main__":

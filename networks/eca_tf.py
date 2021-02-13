@@ -1,7 +1,10 @@
+import math
+from tokenize import group
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.nn.modules import padding
 from torch.nn.modules.batchnorm import BatchNorm1d
 from torch.nn.modules.conv import Conv1d
 
@@ -69,22 +72,60 @@ class ECABasicBlock(nn.Module):
         return x
 
 
+class InputLayer(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.conv1_list = nn.ModuleList([nn.Conv1d(1, 6, 7, stride=2, padding=3, padding_mode="circular") for _ in range(6)])
+        self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(12) for _ in range(6)])
+        self.act = Activation()
+
+        self.conv2 = nn.Conv1d(36, 72, 3, padding=1, groups=2, padding_mode="circular")
+        self.norm2 = nn.InstanceNorm1d(72)
+
+    def forward(self, x):
+        xs = []
+        for i in range(6):
+            h = self.conv1_list[i](x[:, i : i + 1])
+            h = self.norm1_list[i](h)
+            xs.append(h)
+        x = torch.cat(xs, dim=1)
+        x = self.act(x)
+
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = self.act(x)
+
+        return x
+
+
+class PosEncoder(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=600):
+        super().__init__()
+
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        x = x + self.pe[: x.size(0), :]
+        x = self.dropout(x)
+
+        return x
+
+
 class ECATF(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.conv1s = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Conv1d(1, 12, 7, 2, padding=3),
-                    nn.InstanceNorm1d(12),
-                )
-                for _ in range(6)
-            ]
-        )
-        self.elayer1 = nn.Sequential(ECABasicBlock(12 * 6, 128), ECABasicBlock(128, 128))
+        self.conv1 = InputLayer()
+        self.elayer1 = nn.Sequential(ECABasicBlock(72, 128), ECABasicBlock(128, 128))
         self.elayer2 = nn.Sequential(ECABasicBlock(128, 256), ECABasicBlock(256, 256))
-        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=2), nn.AvgPool1d(2))
+        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=2))
         self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=2), nn.AvgPool1d(2))
 
         encoder_layer = TransformerEncoderLayer(
@@ -96,20 +137,23 @@ class ECATF(nn.Module):
         )
         self.encoder = TransformerEncoder(encoder_layer, 8)
 
-        self.decoder = ECABasicBlock(1024, 2048)
+        self.decoder1 = ECABasicBlock(1024, 1536, stride=2)
+        self.decoder2 = ECABasicBlock(1536, 2048)
+        self.decoder3 = ECABasicBlock(2048, 3070, stride=2)
+        self.decoder4 = ECABasicBlock(3070, 4094)
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
             nn.Dropout(p=0.05),
-            nn.Linear(2048, 1024),
+            nn.Linear(4094, 1024),
             Activation(),
             nn.Dropout(p=0.05),
             nn.Linear(1024, 61),
         )
 
     def forward(self, x):
-        xs = [self.conv1s[i](x[:, i : i + 1]) for i in range(6)]
-        x = torch.cat(xs, dim=1)
+        x = self.conv1(x)
+
         x = self.elayer1(x)
         x = self.elayer2(x)
         x = self.elayer3(x)
@@ -119,7 +163,11 @@ class ECATF(nn.Module):
         x = self.encoder(x)
         x = x.transpose(1, 2)
 
-        x = self.decoder(x)
+        x = self.decoder1(x)
+        x = self.decoder2(x)
+        x = self.decoder3(x)
+        x = self.decoder4(x)
+
         x = self.fc(x)
 
         return x

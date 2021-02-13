@@ -59,21 +59,17 @@ def convert_markdown(text):
     return text.replace("\n", "<br>").replace(" ", "&nbsp;")
 
 
-def combine_submissions(dics, expath=None):
-    tdic = {"id": dics[0]["id"].to_list()}
-
-    vdic = np.zeros((len(dics[0]), 61), dtype=np.float32)
-    for dic in dics:
-        vdic += dic.to_numpy()[:, 1:]
-    vdic /= len(dics)
+@torch.no_grad()
+def combine_submissions(pss, expath=None):
+    ps = torch.stack(pss).mean(dim=0)
+    dic = {"id": list(range(3125, 3907))}
     for i in range(61):
-        tdic[str(i)] = vdic[:, i].tolist()
-
-    tdic = pd.DataFrame(tdic)
+        dic[str(i)] = ps[:, i].tolist()
+    dic = pd.DataFrame(dic)
     if expath is not None:
-        dic.to_csv(Path(expath) / "submission-{self.exname}.csv", index=False)
+        dic.to_csv(Path(expath) / f"submission-{expath.name}.csv", index=False)
 
-    return tdic
+    return dic
 
 
 class AverageMeter(object):

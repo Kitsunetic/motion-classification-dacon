@@ -303,12 +303,18 @@ def D0201_v1(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoad
 
 class C0210(TensorDataset):
     def __getitem__(self, index):
-        x, y = super().__getitem__(index)
+        items = super().__getitem__(index)
 
+        x = items[0]
         x = random_shift(x)
         x = random_sin(x, power=0.7)
         x = random_cos(x, power=0.7)
-        return x, y
+
+        if len(items) == 2:
+            y = items[1]
+            return x, y
+        else:
+            return (x, )
 
 
 def D0210(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
@@ -327,11 +333,11 @@ def D0210(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]
     print(samples_per_cls)
 
     ds = C0210(X_train, Y_train)
-    ds_test = TensorDataset(X_test)
+    ds_test = C0210(X_test)
     dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
 
-    skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=261342)
+    skf = StratifiedKFold(n_splits=8, shuffle=True, random_state=261342)
     dl_list = []
     for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
         ds_train = Subset(ds, train_idx)
