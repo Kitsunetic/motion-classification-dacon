@@ -1,4 +1,6 @@
 import math
+import cv2
+import torch.nn as nn
 import random
 from pathlib import Path
 from typing import List, Tuple
@@ -9,6 +11,7 @@ from torch import tensor
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data.dataset import Subset
+import torch.nn.functional as F
 
 
 def D0206_org(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader]:
@@ -39,11 +42,13 @@ def D0206_org(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoa
     return dl_list, dl_test
 
 
+@torch.no_grad()
 def random_shift(x):
     shift = random.randint(0, 600)
     return torch.roll(x, shift, dims=1)
 
 
+@torch.no_grad()
 def random_sin(x, power=0.3):
     freqs = [100, 150, 200, 300, 600]
     wave = torch.sin(torch.tensor(list(range(600))) / random.sample(freqs, 1)[0] * math.pi)
@@ -52,6 +57,7 @@ def random_sin(x, power=0.3):
     return x * signal.reshape(1, -1)
 
 
+@torch.no_grad()
 def random_cos(x, power=0.3):
     freqs = [100, 150, 200, 300, 600]
     wave = torch.cos(torch.tensor(list(range(600))) / random.sample(freqs, 1)[0] * math.pi)
@@ -60,6 +66,7 @@ def random_cos(x, power=0.3):
     return x * signal.reshape(1, -1)
 
 
+@torch.no_grad()
 def random_gnaw(x):
     gnaw_l = int(random.random() * 50)
     gnaw_r = int(random.random() * 50)
@@ -69,6 +76,7 @@ def random_gnaw(x):
     return x
 
 
+@torch.no_grad()
 def omnirandom(x):
     x = random_shift(x)
     x = random_sin(x)
@@ -349,6 +357,26 @@ def D0210(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]
     return dl_list, dl_test, samples_per_cls
 
 
+@torch.no_grad()
+def random_gaussian(x, p=0.5, ksize=5, sigma=(0.0, 1.0)):
+    if random.random() > p:
+        return x
+
+    sigma = random.random() * (sigma[1] - sigma[0]) + sigma[0]
+
+    k = cv2.getGaussianKernel(ksize, sigma)
+    k = tensor(k, dtype=torch.float32)
+    k = torch.repeat_interleave(k, 6, dim=1)
+    k.transpose_(0, 1)
+    k.unsqueeze_(1)
+
+    psize = ksize // 2
+    x = F.pad(x, [psize, psize], "circular")
+    x = F.conv1d(x, k, groups=6)
+
+    return x
+
+
 class C0214(TensorDataset):
     def __getitem__(self, index):
         items = super().__getitem__(index)
@@ -385,6 +413,55 @@ def D0214(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]
 
     ds = C0210(X_train, Y_train)
     ds_test = C0210(X_test)
+    dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
+    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
+
+    skf = StratifiedKFold(n_splits=8, shuffle=True, random_state=261342)
+    dl_list = []
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
+        ds_train = Subset(ds, train_idx)
+        ds_valid = Subset(ds, valid_idx)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+        dl_list.append((fold, dl_train, dl_valid))
+
+    return dl_list, dl_test, samples_per_cls
+
+
+class C0215(TensorDataset):
+    def __getitem__(self, index):
+        items = super().__getitem__(index)
+
+        x = items[0]
+        x = random_shift(x)
+        x = random_sin(x, power=0.3)
+        x = random_cos(x, power=0.3)
+        x = random_gaussian(x, ksize=5, sigma=1.0)
+
+        if len(items) == 2:
+            y = items[1]
+            return x, y
+        else:
+            return (x,)
+
+
+def D0215(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
+    data = np.load(data_dir / "0201.npz")
+    X_train = data["X_train"][:, :6]
+    Y_train = data["Y_train"]
+    X_test = data["X_test"][:, :6]
+
+    X_train = tensor(X_train, dtype=torch.float32)
+    Y_train = tensor(Y_train, dtype=torch.long)
+    X_test = tensor(X_test, dtype=torch.float32)
+    print(X_train.shape, Y_train.shape, X_test.shape)
+
+    # samples_per_cls
+    samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
+    print(samples_per_cls)
+
+    ds = C0215(X_train, Y_train)
+    ds_test = C0215(X_test)
     dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
 

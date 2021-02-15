@@ -83,6 +83,7 @@ class AverageMeter(object):
         self.cnt = 0
         self.losses = []
 
+    @torch.no_grad()
     def update(self, val, n=1):
         self.losses.append(val)
         if n > 0:
@@ -103,6 +104,7 @@ class AccuracyMeter:
         self.numel = 0
         self.acc = 0
 
+    @torch.no_grad()
     def update(self, y, p):
         pp = torch.argmax(p, dim=1)
         self.correct += (y == pp).sum().item()
@@ -121,6 +123,7 @@ class BinaryAccuracyMeter:
         self.numel = 0
         self.acc = 0
 
+    @torch.no_grad()
     def update(self, y, p):
         pp = torch.round(p)
         self.correct += (y == pp).sum().item()

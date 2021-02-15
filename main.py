@@ -31,7 +31,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF-AdamW-CBLoss_beta0.99_gamma3.2-D0210-B128-KFold8-input6-SAM-TTA20"
+COMMENT = "ECATF_v0215-AdamW-CBLoss_beta0.9999_gamma2.0-D0210-B128-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -70,7 +70,14 @@ class Trainer:
 
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
-        self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=5, verbose=True, threshold=1e-8, cooldown=3)
+        self.scheduler = ReduceLROnPlateau(
+            self.optimizer,
+            factor=0.25,
+            patience=3,
+            verbose=True,
+            threshold=1e-8,
+            cooldown=2,
+        )
         self.best_loss = math.inf
 
         self.earlystop_cnt = 0
@@ -88,22 +95,17 @@ class Trainer:
         self.model.train()
 
         ys, ps = [], []
-        self.loss, self.acc = AverageMeter(), AccuracyMeter()
+        self.loss, self.aeloss, self.acc = AverageMeter(), AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl), ncols=100, leave=False) as t:
             for x, y in dl:
                 x_, y_ = x.cuda(), y.cuda()
-                z_ = self.model_ae(x_)
-                p_ = self.model(z_)
-                loss_recon = self.criterion_recon(z_, x_)
+                p_ = self.model(x_)
                 loss = self.criterion(p_, y_)
-                loss_total = loss_recon + loss
 
                 # SAM
-                loss_total.backward()
+                loss.backward()
                 self.optimizer.first_step(zero_grad=True)
-                _z_ = self.model_ae(x_)
-                _p_ = self.model(_z_)
-                (self.criterion_recon(_z_, x_) + self.criterion(_p_, y_)).backward()
+                self.criterion(self.model(x_), y_).backward()
                 self.optimizer.second_step(zero_grad=True)
 
                 self.loss.update(loss.item())
@@ -117,6 +119,7 @@ class Trainer:
         ys = torch.cat(ys)
         ps = torch.cat(ps)
         self.loss = self.loss()
+        self.aeloss = self.aeloss()
         self.acc = self.acc()
 
         return ys, ps  # classification_report 때문에 순서 바뀌면 안됨
@@ -126,14 +129,13 @@ class Trainer:
         self.model.eval()
 
         pss = []
-        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
+        self.val_loss, self.val_aeloss, self.val_acc = AverageMeter(), AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl) * N_TTA, ncols=100, leave=False) as t:
             for _ in range(N_TTA):
                 ys, ps = [], []
                 for x, y in dl:
                     x_, y_ = x.cuda(), y.cuda()
-                    z_ = self.model_ae(x_)
-                    p_ = self.model(z_)
+                    p_ = self.model(x_)
 
                     loss = self.criterion(p_, y_)
                     self.val_loss.update(loss.item())
@@ -167,8 +169,9 @@ class Trainer:
         now = datetime.now()
         print(
             f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
-            f"loss: {self.loss:.6f} acc: {self.acc*100:.2f}% ll: {ll_train:.6f}",
-            f"val_loss: {self.val_loss:.6f} val_acc: {self.val_acc*100:.2f}%  val_ll: {ll_valid:.6f}",
+            f"loss: {self.loss:.6f}:{self.val_loss:.6f}",
+            f"acc: {self.acc*100:.2f}:{self.val_acc*100:.2f}%",
+            f"ll: {ll_train:.6f}:{ll_valid:.6f}",
         )
 
         # Tensorboard
@@ -236,14 +239,13 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0214(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
         model = ww.ECATF().cuda()
         model_ae = ww.SCAE().cuda()
-        criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0)
-        # criterion = FocalLoss(gamma=3.2)
-        # optimizer = AdamW(model.parameters(), lr=1e-4)
+        # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
+        criterion = FocalLoss(gamma=3.2).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
         trainer = Trainer(model, model_ae, criterion, optimizer, writer, EXNAME, EXPATH, fold)
