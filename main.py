@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import networks as ww
-from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5
+from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -42,11 +42,14 @@ EPOCHS = 100
 DO_KFOLD = True
 N_TTA = 20
 
+EARLYSTOP_PATIENCE = 20
+
 
 class Trainer:
     def __init__(
         self,
         model: nn.Module,
+        model_ae: nn.Module,
         criterion: nn.Module,
         optimizer,
         writer: SummaryWriter,
@@ -55,6 +58,7 @@ class Trainer:
         fold: int,
     ):
         self.model = model
+        self.model_ae = model_ae
         self.criterion = criterion
         self.optimizer = optimizer
         self.writer = writer
@@ -62,15 +66,23 @@ class Trainer:
         self.expath = expath
         self.fold = fold
 
+        self.criterion_recon = nn.L1Loss().cuda()
+
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
         self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.25, patience=5, verbose=True, threshold=1e-8, cooldown=3)
         self.best_loss = math.inf
 
+        self.earlystop_cnt = 0
+
         for epoch in range(1, num_epochs + 1):
             result_train = self.train_loop(dl_train)
             result_valid = self.valid_loop(dl_valid)
             self.callback(epoch, result_train, result_valid)
+
+            if self.earlystop_cnt > EARLYSTOP_PATIENCE:
+                print("[Early Stop]")
+                break
 
     def train_loop(self, dl):
         self.model.train()
@@ -80,26 +92,24 @@ class Trainer:
         with tqdm(total=len(dl), ncols=100, leave=False) as t:
             for x, y in dl:
                 x_, y_ = x.cuda(), y.cuda()
-                p = self.model(x_)
-                # print(y_.shape, p.shape)
-                loss = self.criterion(p, y_)
-
-                # Common Optimizer
-                """self.optimizer.zero_grad()
-                loss.backward()
-                # clip_grad_norm_(self.model.parameters(), 0.5)
-                self.optimizer.step()"""
+                z_ = self.model_ae(x_)
+                p_ = self.model(z_)
+                loss_recon = self.criterion_recon(z_, x_)
+                loss = self.criterion(p_, y_)
+                loss_total = loss_recon + loss
 
                 # SAM
-                loss.backward()
+                loss_total.backward()
                 self.optimizer.first_step(zero_grad=True)
-                self.criterion(self.model(x_), y_).backward()
+                _z_ = self.model_ae(x_)
+                _p_ = self.model(_z_)
+                (self.criterion_recon(_z_, x_) + self.criterion(_p_, y_)).backward()
                 self.optimizer.second_step(zero_grad=True)
 
                 self.loss.update(loss.item())
-                self.acc.update(y_, p)
+                self.acc.update(y_, p_)
                 ys.append(y)
-                ps.append(p.detach().cpu())
+                ps.append(p_.detach().cpu())
 
                 t.set_postfix_str(f"loss: {loss.item():.6f} acc: {self.acc()*100:.2f}%", refresh=False)
                 t.update()
@@ -116,13 +126,21 @@ class Trainer:
         self.model.eval()
 
         pss = []
+        self.val_loss, self.val_acc = AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl) * N_TTA, ncols=100, leave=False) as t:
-            for tta in range(N_TTA):
+            for _ in range(N_TTA):
                 ys, ps = [], []
                 for x, y in dl:
-                    p = self.model(x.cuda()).cpu()
+                    x_, y_ = x.cuda(), y.cuda()
+                    z_ = self.model_ae(x_)
+                    p_ = self.model(z_)
+
+                    loss = self.criterion(p_, y_)
+                    self.val_loss.update(loss.item())
+                    self.val_acc.update(y_, p_)
+
                     ys.append(y)
-                    ps.append(p)
+                    ps.append(p_.cpu())
                     t.update()
 
                 ps = torch.cat(ps)
@@ -131,8 +149,8 @@ class Trainer:
         ys = torch.cat(ys)
         ps = torch.stack(pss).mean(dim=0)
 
-        self.val_loss = self.criterion(ps, ys)
-        self.val_acc = (torch.argmax(ps, dim=1) == ys).sum().item() / len(ys)
+        self.val_loss = self.val_loss()
+        self.val_acc = self.val_acc()
 
         return ys, ps
 
@@ -173,9 +191,12 @@ class Trainer:
         # Early Stop
         if self.best_loss - self.val_loss > 1e-8:
             self.best_loss = self.val_loss
+            self.earlystop_cnt = 0
 
             # Save Checkpoint
             torch.save(self.model.state_dict(), self.expath / f"best-ckpt-{self.fold}.pth")
+        else:
+            self.earlystop_cnt += 1
 
     @torch.no_grad()
     def evaluate(self, dl):
@@ -215,16 +236,17 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0214(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
         model = ww.ECATF().cuda()
+        model_ae = ww.SCAE().cuda()
         criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.99, gamma=3.2)
-        criterion = FocalLoss(gamma=3.2)
+        # criterion = FocalLoss(gamma=3.2)
         # optimizer = AdamW(model.parameters(), lr=1e-4)
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
-        trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
+        trainer = Trainer(model, model_ae, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
         pss += [trainer.submission(dl_test)]
 

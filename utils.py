@@ -175,16 +175,20 @@ class ClassBalancedLoss(nn.Module):
 
         super().__init__()
 
-        self.effective_num = 1.0 - beta ** samples_per_cls
-        self.weights = (1.0 - beta) / self.effective_num
+        effective_num = 1.0 - beta ** samples_per_cls
+        weights = (1.0 - beta) / effective_num
         # TODO no_of_classes를 왜 곱하는지??
-        self.weights = self.weights / torch.sum(self.weights) * no_of_classes
-        self.weights.unsqueeze_(0)
+        weights = weights / torch.sum(weights) * no_of_classes
+        weights.unsqueeze_(0)
 
-        self.no_of_classes = no_of_classes
+        no_of_classes = no_of_classes
         self.loss_type = loss_type.lower()
         self.beta = beta
         self.gamma = gamma
+
+        self.register_buffer("samples_per_cls", samples_per_cls)
+        self.register_buffer("effective_num", effective_num)
+        self.register_buffer("weights", weights)
 
     def forward(self, input, target):
         one_hot = F.one_hot(target, self.no_of_classes).float()

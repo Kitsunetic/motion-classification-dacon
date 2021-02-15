@@ -4,3 +4,4 @@ from .resnest import resnest50, resnest101, resnest200, resnest269
 from .resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from .sam import SAM
 from .transformer import TransformerModel_v1, TransformerModel_v2, TransformerModel_v3, TransformerModel_v4
+from .scae import SCAE
