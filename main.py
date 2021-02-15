@@ -241,7 +241,7 @@ def main():
     for fold, dl_train, dl_valid in dl_list:
         model = ww.ECATF().cuda()
         model_ae = ww.SCAE().cuda()
-        criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.99, gamma=3.2)
+        criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0)
         # criterion = FocalLoss(gamma=3.2)
         # optimizer = AdamW(model.parameters(), lr=1e-4)
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)

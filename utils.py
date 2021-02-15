@@ -181,7 +181,7 @@ class ClassBalancedLoss(nn.Module):
         weights = weights / torch.sum(weights) * no_of_classes
         weights.unsqueeze_(0)
 
-        no_of_classes = no_of_classes
+        self.no_of_classes = no_of_classes
         self.loss_type = loss_type.lower()
         self.beta = beta
         self.gamma = gamma
