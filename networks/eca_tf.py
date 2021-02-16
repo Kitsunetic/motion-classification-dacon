@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
-from .common import Activation, cba3x3, conv3x3
+from .common import PADDING_MODE, Activation, cba3x3, conv3x3
+from .ctfg import TFDecoderBlock, TFEncoderBlock
 
 
 class ECALayer(nn.Module):
@@ -70,7 +71,9 @@ class ECABasicBlock(nn.Module):
 
 
 class PosEncoder(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=600):
+    def __init__(self, d_model, dropout=0.1, max_len=600, addition="cat"):
+        assert addition in ["cat", "sum"]
+        self.addition = addition
         super().__init__()
 
         self.dropout = nn.Dropout2d(p=dropout)
@@ -85,8 +88,10 @@ class PosEncoder(nn.Module):
     def forward(self, x):
         # print(x.shape, self.pe[:, : x.size(1)].expand_as(x).shape)
         # exit(0)
-        x = torch.cat([x, self.pe[:, : x.size(1)].expand_as(x)], dim=1)
-        # x = x + self.pe[:, : x.size(1)]
+        if self.addition == "cat":
+            x = torch.cat([x, self.pe[:, : x.size(1)].expand_as(x)], dim=1)
+        elif self.addition == "sum":
+            x = x + self.pe[:, : x.size(1)]
         x = self.dropout(x)
 
         return x
@@ -96,20 +101,20 @@ class ECATF(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.conv1_list = nn.ModuleList([nn.Conv1d(1, 6, 7, padding=3, padding_mode="circular") for _ in range(6)])
+        self.conv1_list = nn.ModuleList([nn.Conv1d(1, 6, 7, padding=3, padding_mode=PADDING_MODE) for _ in range(6)])
         self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(12) for _ in range(6)])
         self.act = Activation()
         self.pool = nn.AvgPool1d(2)
 
-        self.conv2 = nn.Conv1d(36, 72, 3, stride=1, padding=1, groups=2, padding_mode="circular")
+        self.conv2 = nn.Conv1d(36, 72, 3, stride=1, padding=1, groups=2, padding_mode=PADDING_MODE)
         self.norm2 = nn.InstanceNorm1d(72)
 
         self.elayer1 = nn.Sequential(ECABasicBlock(72, 128), ECABasicBlock(128, 128))
         self.elayer2 = nn.Sequential(ECABasicBlock(128, 256), ECABasicBlock(256, 256))
-        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=1))
-        self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=1))
+        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=2))
+        self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=2))
 
-        self.pe = PosEncoder(
+        """self.pe = PosEncoder(
             d_model=1024,
             dropout=0.1,
             max_len=600,
@@ -121,11 +126,25 @@ class ECATF(nn.Module):
             dropout=0.1,
             activation="relu",
         )
-        self.encoder = TransformerEncoder(encoder_layer, 8)
+        self.encoder = TransformerEncoder(encoder_layer, 8)"""
+        self.tf_encoder = TFEncoderBlock(
+            d_model=1024,
+            n_head=8,
+            n_layers=8,
+            pos_encoder=True,
+            addition_mode="cat",
+            transpose=True,
+        )
+        self.tf_decoder = TFDecoderBlock(
+            d_model=1024,
+            n_head=8,
+            n_layers=8,
+            transpose=True,
+        )
 
-        self.decoder1 = ECABasicBlock(1024, 1536, stride=1)
+        self.decoder1 = ECABasicBlock(1024, 1536, stride=2)
         self.decoder2 = ECABasicBlock(1536, 2048)
-        self.decoder3 = ECABasicBlock(2048, 3070, stride=1)
+        self.decoder3 = ECABasicBlock(2048, 3070, stride=2)
         self.decoder4 = ECABasicBlock(3070, 4094)
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
@@ -154,24 +173,19 @@ class ECATF(nn.Module):
 
         x = self.elayer1(x)
         x = self.elayer2(x)
-        x = self.pool(x)
         x = self.elayer3(x)
-        x = self.pool(x)
         x = self.elayer4(x)
 
-        x = x.transpose(1, 2)
-        x = self.pe(x)
-        x = self.encoder(x)
-        x = x.transpose(1, 2)
+        # x = x.transpose(1, 2)
+        # x = self.pe(x)
+        x = self.tf_encoder(x)
+        x = self.tf_decoder(x)
+        # x = x.transpose(1, 2)
 
         x = self.decoder1(x)
-        x = self.pool(x)
         x = self.decoder2(x)
-        x = self.pool(x)
         x = self.decoder3(x)
-        x = self.pool(x)
         x = self.decoder4(x)
-        x = self.pool(x)
 
         x = self.fc(x)
 

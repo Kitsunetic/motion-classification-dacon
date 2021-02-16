@@ -371,8 +371,10 @@ def random_gaussian(x, p=0.5, ksize=5, sigma=(0.0, 1.0)):
     k.unsqueeze_(1)
 
     psize = ksize // 2
+    x.unsqueeze_(0)
     x = F.pad(x, [psize, psize], "circular")
     x = F.conv1d(x, k, groups=6)
+    x.squeeze_(0)
 
     return x
 
@@ -434,9 +436,9 @@ class C0215(TensorDataset):
 
         x = items[0]
         x = random_shift(x)
-        x = random_sin(x, power=0.3)
-        x = random_cos(x, power=0.3)
-        x = random_gaussian(x, ksize=5, sigma=1.0)
+        x = random_sin(x, power=0.7)
+        x = random_cos(x, power=0.7)
+        x = random_gaussian(x, ksize=3, sigma=(0.001, 0.400))
 
         if len(items) == 2:
             y = items[1]
@@ -446,7 +448,7 @@ class C0215(TensorDataset):
 
 
 def D0215(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
-    data = np.load(data_dir / "0201.npz")
+    data = np.load(data_dir / "0214.npz")
     X_train = data["X_train"][:, :6]
     Y_train = data["Y_train"]
     X_test = data["X_test"][:, :6]

@@ -105,8 +105,6 @@ class SplAtConv1d(nn.Module):
 
 class ResNeStBottleneck(nn.Module):
     # https://github.com/zhanghang1989/ResNeSt/blob/master/resnest/torch/resnet.py
-    expansion = 4
-
     def __init__(
         self,
         inplanes,
@@ -120,11 +118,13 @@ class ResNeStBottleneck(nn.Module):
         avd_first=False,
         dilation=1,
         is_first=False,
-        norm_layer=None,
+        norm_layer=nn.BatchNorm1d,
         last_gamma=False,
+        expansion=4,
     ):
         super().__init__()
         group_width = int(planes * (bottleneck_width / 64.0)) * cardinality
+        self.expansion = expansion
 
         self.conv1 = nn.Conv1d(inplanes, group_width, kernel_size=1, bias=False)
         self.bn1 = norm_layer(group_width)

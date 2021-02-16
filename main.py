@@ -1,3 +1,4 @@
+from contextlib import redirect_stderr
 import math
 import random
 from collections import defaultdict
@@ -17,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import networks as ww
-from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214
+from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -31,11 +32,11 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF_v0215-AdamW-Focal0.0001_gamma2.4-D0210-B120-KFold8-input6-SAM-TTA20"
+COMMENT = "RTFModel-AdamW-Focal0.0001_gamma3.2-D0215-B100-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 120
+BATCH_SIZE = 100
 NUM_CPUS = 8
 EPOCHS = 100
 
@@ -49,7 +50,6 @@ class Trainer:
     def __init__(
         self,
         model: nn.Module,
-        model_ae: nn.Module,
         criterion: nn.Module,
         optimizer,
         writer: SummaryWriter,
@@ -58,7 +58,6 @@ class Trainer:
         fold: int,
     ):
         self.model = model
-        self.model_ae = model_ae
         self.criterion = criterion
         self.optimizer = optimizer
         self.writer = writer
@@ -66,17 +65,15 @@ class Trainer:
         self.expath = expath
         self.fold = fold
 
-        self.criterion_recon = nn.L1Loss().cuda()
-
     def fit(self, dl_train, dl_valid, num_epochs):
         self.num_epochs = num_epochs
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
-            factor=0.25,
+            factor=0.5,
             patience=3,
             verbose=True,
             threshold=1e-8,
-            cooldown=2,
+            cooldown=0,
         )
         self.best_loss = math.inf
 
@@ -201,6 +198,12 @@ class Trainer:
         else:
             self.earlystop_cnt += 1
 
+        # Last Cross Entropy
+        if epoch == 20:
+            self.criterion = FocalLoss(gamma=2.0)
+        elif epoch == 40:
+            self.criterion = nn.CrossEntropyLoss().cuda()
+
     @torch.no_grad()
     def evaluate(self, dl):
         self.model.eval()
@@ -239,16 +242,22 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0210(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0215(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = ww.ECATF().cuda()
-        model_ae = ww.SCAE().cuda()
+        # model = ww.ECATF().cuda()
+        model = ww.RTFModel(
+            n_resblocks=[8, 8],
+            n_layers=[4, 4],
+            n_head=[8, 8],
+            reduction=16,
+            pos_encoder=True,
+        ).cuda()
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
-        criterion = FocalLoss(gamma=2.4).cuda()
+        criterion = FocalLoss(gamma=3.2).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
-        trainer = Trainer(model, model_ae, criterion, optimizer, writer, EXNAME, EXPATH, fold)
+        trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
         pss += [trainer.submission(dl_test)]
 
