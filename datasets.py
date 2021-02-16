@@ -43,7 +43,10 @@ def D0206_org(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoa
 
 
 @torch.no_grad()
-def random_shift(x):
+def random_shift(x, p=0.5):
+    if random.random() > p:
+        return x
+        
     shift = random.randint(0, 600)
     return torch.roll(x, shift, dims=1)
 
@@ -438,7 +441,7 @@ class C0215(TensorDataset):
         x = random_shift(x)
         x = random_sin(x, power=0.7)
         x = random_cos(x, power=0.7)
-        x = random_gaussian(x, ksize=3, sigma=(0.001, 0.400))
+        x = random_gaussian(x, ksize=3, sigma=(0.1, 1.0))
 
         if len(items) == 2:
             y = items[1]

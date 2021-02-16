@@ -33,7 +33,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "RTFModel-AdamW-Focal0.0001_gamma3.2-D0215-B100-KFold8-input6-SAM-TTA20"
+COMMENT = "ConvTransformerModel_v2-AdamW-Focal0.0001_gamma3.2-D0215-B100-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 

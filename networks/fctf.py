@@ -103,7 +103,7 @@ class ConvTransformerModel(nn.Module):
 
         self.self_attn1 = ChannelSpatialAttentionGroup(256, 384, 3, 2)
         self.self_attn2 = ChannelSpatialAttentionGroup(384, 512, 3, 2)
-        self.self_attn3 = ChannelSpatialAttentionGroup(512, 768, 3, 2, pool=True)
+        self.self_attn3 = ChannelSpatialAttentionGroup(512, 768, 3, 2, pool=False)
         self.self_attn4 = ChannelSpatialAttentionGroup(768, 1024, 3, 2, pool=True)
 
         # TODO 푸리에 변환한 값 추가
@@ -129,7 +129,7 @@ class ConvTransformerModel(nn.Module):
         x = self.self_attn1(x)
         x = self.self_attn2(x)
         x = self.self_attn3(x)  # 75
-        x = self.self_attn4(x)  # 37
+        x = self.self_attn4(x)  # 75
 
         x = self.global_pool(x)
         x = self.decision(x)
