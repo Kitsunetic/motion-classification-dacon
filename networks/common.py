@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.pooling import MaxPool1d
 
 PADDING_MODE = "circular"
 Activation = nn.ELU
@@ -23,6 +24,6 @@ class CircularHalfPooling(nn.AvgPool1d):
 
     def forward(self, x):
         x = F.pad(x, (1, 1), "circular")
-        super().__call__(x)
+        super().forward(x)
 
         return x

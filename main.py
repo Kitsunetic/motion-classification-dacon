@@ -1,5 +1,6 @@
 from contextlib import redirect_stderr
 import math
+from networks.fctf import ConvTransformerModel
 import random
 from collections import defaultdict
 from datetime import datetime
@@ -245,14 +246,15 @@ def main():
     dl_list, dl_test, samples_per_cls = D0215(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
+        model = ConvTransformerModel().cuda()
         # model = ww.ECATF().cuda()
-        model = ww.RTFModel(
+        """model = ww.RTFModel(
             n_resblocks=[8, 8],
             n_layers=[4, 4],
             n_head=[8, 8],
             reduction=16,
             pos_encoder=True,
-        ).cuda()
+        ).cuda()"""
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         criterion = FocalLoss(gamma=3.2).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)

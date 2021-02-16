@@ -172,6 +172,11 @@ class ResNeStBottleneck(nn.Module):
 
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
+        if self.downsample is None and (inplanes != planes * self.expansion or self.stride != 1 or self.dilation != 1):
+            self.downsample = nn.Sequential(
+                nn.Conv1d(inplanes, planes * self.expansion, 1, bias=False),
+                nn.BatchNorm1d(planes * self.expansion),
+            )
         self.dilation = dilation
         self.stride = stride
 

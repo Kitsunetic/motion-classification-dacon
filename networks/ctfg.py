@@ -107,7 +107,7 @@ class RTFG(nn.Module):
             Activation(inplace=True),
         )
 
-        self.transpose = transpose
+        # self.transpose = transpose
 
     def forward(self, x):
         x = self.rg(x)

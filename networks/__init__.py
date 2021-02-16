@@ -1,5 +1,6 @@
-from .ctfg import RTFModel
+from .ctfg import RTFModel, TFDecoderBlock, TFEncoderBlock
 from .eca_tf import ECATF
+from .fctf import ConvTransformerModel
 from .legacy_resnet import LegacyResNet18, LegacyResNet34, LegacyResNet50, LegacyResNet101, LegacyResNet152
 from .resnest import resnest50, resnest101, resnest200, resnest269
 from .resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152

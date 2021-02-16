@@ -6,7 +6,63 @@ import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from .common import PADDING_MODE, Activation, cba3x3, conv3x3
-from .ctfg import TFDecoderBlock, TFEncoderBlock
+
+
+class TFEncoderBlock(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        n_head,
+        n_layers,
+        pos_encoder=True,
+        addition_mode="sum",
+        transpose=True,
+    ):
+        super().__init__()
+
+        self.pe = None
+        if pos_encoder:
+            self.pe = PosEncoder(d_model, addition=addition_mode)
+        self.encoder = TransformerEncoder(
+            encoder_layer=TransformerEncoderLayer(d_model=d_model, nhead=n_head),
+            num_layers=n_layers,
+        )
+
+        self.transpose = transpose
+
+    def forward(self, x):
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        if self.pe is not None:
+            x = self.pe(x)
+        x = self.encoder(x)
+
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        return x
+
+
+class TFDecoderBlock(nn.Module):
+    def __init__(self, d_model, n_head, n_layers, transpose=True):
+        super().__init__()
+
+        self.decoder = TransformerDecoder(
+            decoder_layer=TransformerDecoderLayer(d_model, n_head),
+            num_layers=n_layers,
+        )
+
+    def forward(self, x):
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        x = self.decoder(x)
+
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        return x
 
 
 class ECALayer(nn.Module):

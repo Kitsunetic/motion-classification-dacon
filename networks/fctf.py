@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn.modules.activation import MultiheadAttention
 
-from .common import CircularHalfPooling, PADDING_MODE, Activation, cba3x3, conv3x3
+from .common import PADDING_MODE, Activation, CircularHalfPooling, cba3x3, conv3x3
 from .resnest import ResNeStBottleneck
 
 
@@ -20,16 +20,11 @@ class ConvBatchNorm(nn.Sequential):
 
 
 class ChannelSpatialAttention(nn.Module):
-    def __init__(self, inchannels, channels, kernel_size):
+    def __init__(self, kernel_size):
         super().__init__()
 
         psize = kernel_size // 2
-        self.conv = nn.Conv2d(
-            inchannels,
-            channels,
-            kernel_size,
-            padding=psize,
-        )
+        self.conv = nn.Conv2d(1, 1, kernel_size, padding=psize, padding_mode="circular")
         self.gamma = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
@@ -38,48 +33,52 @@ class ChannelSpatialAttention(nn.Module):
         h = h.squeeze(1)
         h = h.sigmoid()
 
-        x = torch.addcmul(x, self.gamma, x, h)
+        x = x + self.gamma * x * h
 
         return x
 
 
-class MultiHeadConvolutionalAttention(nn.Module):
-    def __init__(self, inchannels, channels, kernel_size):
+class ChannelSpatialAttentionBlock(nn.Module):
+    def __init__(self, inchannels, channels, kernel_size, stride=1):
         super().__init__()
 
-        self.conv_q = ConvBatchNorm(inchannels, channels, 1)
-        self.conv_k = ConvBatchNorm(inchannels, channels, 1)
-        self.conv_v = ConvBatchNorm(inchannels, channels, 1)
+        self.conv1 = ConvBatchNorm(inchannels, channels, 1)
+        self.attn = ChannelSpatialAttention(kernel_size)
+        self.conv2 = ConvBatchNorm(channels, channels, 3, stride=stride, padding=1)
 
-        self.attn = ChannelSpatialAttention(channels, channels, kernel_size)
-        self.conv = ConvBatchNorm(channels, channels, 3)
-
-    def forward(self, q, k, v):
-        q = self.conv_q(q)
-        k = self.conv_k(k)
-        v = self.conv_v(v)
-
-        x = torch.cat([q, k, v], dim=1)
-        x = self.conv(x)
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.attn(x)
+        x = self.conv2(x)
 
         return x
 
 
-class MultiHeadConvolutionalAttentionGroup(nn.Module):
+class ChannelSpatialAttentionGroup(nn.Module):
     def __init__(self, inchannels, channels, kernel_size, n_layers, pool=False):
         super().__init__()
 
-        m = [MultiHeadConvolutionalAttention(inchannels, channels, kernel_size)]
-        for _ in range(1, n_layers):
-            m.append(MultiHeadConvolutionalAttention(channels, channels, kernel_size))
+        psize = kernel_size // 2
+        self.conv = ConvBatchNorm(inchannels, channels, kernel_size, padding=psize)
 
-        if pool:
-            m.append(CircularHalfPooling())
+        self.m = nn.ModuleList()
+        for _ in range(n_layers):
+            self.m.append(ChannelSpatialAttentionBlock(channels, channels, kernel_size))
 
-        self.body = nn.Sequential(*m)
+        self.pool = CircularHalfPooling() if pool else None
 
     def forward(self, x):
-        return x + self.body(x)
+        x = self.conv(x)
+        h = x
+
+        for m in self.m:
+            x = m(h)
+
+        x = h + x
+        if self.pool is not None:
+            x = self.pool(x)
+
+        return x
 
 
 class ConvTransformerModel(nn.Module):
@@ -99,13 +98,15 @@ class ConvTransformerModel(nn.Module):
         )
         self.pool = CircularHalfPooling()
 
-        self.feature_extraction1 = self._fe_layer(64, 128, stride=1)
-        self.feature_extraction2 = self._fe_layer(128, 256, stride=1)
+        self.feature_extraction1 = self._fe_layer(64, 64, stride=1)
+        self.feature_extraction2 = self._fe_layer(128, 128, stride=1)
 
-        self.self_attn1 = MultiHeadConvolutionalAttentionGroup(256, 384, 3, 2)
-        self.self_attn2 = MultiHeadConvolutionalAttentionGroup(384, 512, 3, 2)
-        self.self_attn3 = MultiHeadConvolutionalAttentionGroup(512, 768, 3, 2, pool=True)
-        self.self_attn4 = MultiHeadConvolutionalAttentionGroup(768, 1024, 3, 2, pool=True)
+        self.self_attn1 = ChannelSpatialAttentionGroup(256, 384, 3, 2)
+        self.self_attn2 = ChannelSpatialAttentionGroup(384, 512, 3, 2)
+        self.self_attn3 = ChannelSpatialAttentionGroup(512, 768, 3, 2, pool=True)
+        self.self_attn4 = ChannelSpatialAttentionGroup(768, 1024, 3, 2, pool=True)
+
+        # TODO 푸리에 변환한 값 추가
 
         self.global_pool = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
@@ -128,7 +129,7 @@ class ConvTransformerModel(nn.Module):
         x = self.self_attn1(x)
         x = self.self_attn2(x)
         x = self.self_attn3(x)  # 75
-        x = self.self_attn4(x)  # 34
+        x = self.self_attn4(x)  # 37
 
         x = self.global_pool(x)
         x = self.decision(x)
