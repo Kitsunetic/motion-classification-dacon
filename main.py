@@ -31,7 +31,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF_v0215-AdamW-CBLoss_beta0.9999_gamma2.0-D0210-B128-KFold8-input6-SAM-TTA20"
+COMMENT = "ECATF_v0215-AdamW-Focal0.0001_gamma2.4-D0210-B120-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -245,7 +245,7 @@ def main():
         model = ww.ECATF().cuda()
         model_ae = ww.SCAE().cuda()
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
-        criterion = FocalLoss(gamma=3.2).cuda()
+        criterion = FocalLoss(gamma=2.4).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
         trainer = Trainer(model, model_ae, criterion, optimizer, writer, EXNAME, EXPATH, fold)

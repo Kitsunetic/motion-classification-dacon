@@ -1,13 +1,9 @@
 import math
-from tokenize import group
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.nn.modules import padding
-from torch.nn.modules.batchnorm import BatchNorm1d
-from torch.nn.modules.conv import Conv1d
 
 from .common import Activation, cba3x3, conv3x3
 
@@ -103,14 +99,15 @@ class ECATF(nn.Module):
         self.conv1_list = nn.ModuleList([nn.Conv1d(1, 6, 7, padding=3, padding_mode="circular") for _ in range(6)])
         self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(12) for _ in range(6)])
         self.act = Activation()
+        self.pool = nn.AvgPool1d(2)
 
-        self.conv2 = nn.Conv1d(36, 72, 3, stride=2, padding=1, groups=2, padding_mode="circular")
-        self.norm2 = nn.BatchNorm1d(72)
+        self.conv2 = nn.Conv1d(36, 72, 3, stride=1, padding=1, groups=2, padding_mode="circular")
+        self.norm2 = nn.InstanceNorm1d(72)
 
         self.elayer1 = nn.Sequential(ECABasicBlock(72, 128), ECABasicBlock(128, 128))
         self.elayer2 = nn.Sequential(ECABasicBlock(128, 256), ECABasicBlock(256, 256))
-        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=2))
-        self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=2))
+        self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=1))
+        self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=1))
 
         self.pe = PosEncoder(
             d_model=1024,
@@ -126,9 +123,9 @@ class ECATF(nn.Module):
         )
         self.encoder = TransformerEncoder(encoder_layer, 8)
 
-        self.decoder1 = ECABasicBlock(1024, 1536, stride=2)
+        self.decoder1 = ECABasicBlock(1024, 1536, stride=1)
         self.decoder2 = ECABasicBlock(1536, 2048)
-        self.decoder3 = ECABasicBlock(2048, 3070, stride=2)
+        self.decoder3 = ECABasicBlock(2048, 3070, stride=1)
         self.decoder4 = ECABasicBlock(3070, 4094)
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
@@ -148,14 +145,18 @@ class ECATF(nn.Module):
             xs.append(h)
         x = torch.cat(xs, dim=1)
         x = self.act(x)
+        x = self.pool(x)  #
 
         x = self.conv2(x)
         x = self.norm2(x)
         x = self.act(x)
+        x = self.pool(x)
 
         x = self.elayer1(x)
         x = self.elayer2(x)
+        x = self.pool(x)
         x = self.elayer3(x)
+        x = self.pool(x)
         x = self.elayer4(x)
 
         x = x.transpose(1, 2)
@@ -164,9 +165,13 @@ class ECATF(nn.Module):
         x = x.transpose(1, 2)
 
         x = self.decoder1(x)
+        x = self.pool(x)
         x = self.decoder2(x)
+        x = self.pool(x)
         x = self.decoder3(x)
+        x = self.pool(x)
         x = self.decoder4(x)
+        x = self.pool(x)
 
         x = self.fc(x)
 
