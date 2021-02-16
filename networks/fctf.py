@@ -86,26 +86,36 @@ class ConvTransformerModel(nn.Module):
         super().__init__()
 
         self.shallow_extraction = nn.Sequential(
-            nn.Conv1d(6, 18, 3, padding=1, groups=6, padding_mode="circular"),
-            nn.InstanceNorm1d(30),
+            nn.Conv1d(6, 60, 3, padding=1, groups=6, padding_mode="circular"),
+            nn.InstanceNorm1d(60),
             nn.ReLU(inplace=True),
-            nn.Conv1d(18, 36, 3, padding=1, groups=2, padding_mode="circular"),
-            nn.InstanceNorm1d(36),
+            nn.Conv1d(60, 64, 3, padding=1, groups=2, padding_mode="circular"),
+            nn.InstanceNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.Conv1d(36, 64, 3, padding=1, padding_mode="circular"),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(64, 128, 3, padding=1, padding_mode="circular"),
+            nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
         )
-        self.pool = CircularHalfPooling()
+        self.pool = CircularHalfPooling()  # 300
 
-        self.feature_extraction1 = self._fe_layer(64, 64, stride=1)
-        self.feature_extraction2 = self._fe_layer(128, 128, stride=1)
+        self.body = nn.Sequential(
+            self._fe_layer(128, 128, stride=1),
+            CircularHalfPooling(),  # 150
+            ChannelSpatialAttentionGroup(256, 256, 3, 2),
+            self._fe_layer(256, 256, stride=1),
+            CircularHalfPooling(),  # 75
+            ChannelSpatialAttentionGroup(512, 512, 3, 2),
+            self._fe_layer(512, 512, stride=1),
+            CircularHalfPooling(),  # 37
+            ChannelSpatialAttentionGroup(1024, 1024, 3, 2),
+            self._fe_layer(1024, 1024, stride=1),
+            CircularHalfPooling(),  # 18
+            ChannelSpatialAttentionGroup(2048, 2048, 3, 2),
+        )
 
-        self.self_attn1 = ChannelSpatialAttentionGroup(256, 384, 3, 2)
-        self.self_attn2 = ChannelSpatialAttentionGroup(384, 512, 3, 2)
-        self.self_attn3 = ChannelSpatialAttentionGroup(512, 768, 3, 2, pool=False)
-        self.self_attn4 = ChannelSpatialAttentionGroup(768, 1024, 3, 2, pool=True)
-
+        # TODO layer 수 늘리기
+        # TODO 채널 늘리기
+        # TODO GAP 전에 conv
         # TODO 푸리에 변환한 값 추가
 
         self.global_pool = nn.Sequential(
@@ -113,23 +123,16 @@ class ConvTransformerModel(nn.Module):
             nn.Flatten(),
         )
         self.decision = nn.Sequential(
-            nn.Linear(1024, 512),
+            nn.Linear(2048, 1024),
             nn.ReLU(inplace=True),
-            nn.Linear(512, 61),
+            nn.Linear(1024, 61),
         )
 
     def forward(self, x):
         x = self.shallow_extraction(x)
         x = self.pool(x)  # 300
 
-        x = self.feature_extraction1(x)
-        x = self.feature_extraction2(x)
-        x = self.pool(x)  # 150
-
-        x = self.self_attn1(x)
-        x = self.self_attn2(x)
-        x = self.self_attn3(x)  # 75
-        x = self.self_attn4(x)  # 75
+        x = self.body(x)
 
         x = self.global_pool(x)
         x = self.decision(x)
