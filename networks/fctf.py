@@ -101,16 +101,16 @@ class ConvTransformerModel(nn.Module):
         self.body = nn.Sequential(
             # self._fe_layer(128, 128, stride=1),
             # CircularHalfPooling(),  # 150
-            ChannelSpatialAttentionGroup(128, 256, 3, 2, pool=False),
+            ChannelSpatialAttentionGroup(128, 256, 9, 2, pool=False),
             # self._fe_layer(256, 256, stride=1),
             # CircularHalfPooling(),  # 75
-            ChannelSpatialAttentionGroup(256, 512, 3, 2, pool=True),
+            ChannelSpatialAttentionGroup(256, 512, 9, 2, pool=True),
             # self._fe_layer(512, 512, stride=1),
             # CircularHalfPooling(),  # 37
-            ChannelSpatialAttentionGroup(512, 1024, 3, 2, pool=True),
+            ChannelSpatialAttentionGroup(512, 1024, 9, 2, pool=True),
             # self._fe_layer(1024, 1024, stride=1),
             # CircularHalfPooling(),  # 18
-            ChannelSpatialAttentionGroup(1024, 2048, 3, 2, pool=True),
+            ChannelSpatialAttentionGroup(1024, 2048, 9, 2, pool=True),
         )
 
         # TODO layer 수 늘리기
