@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import networks as ww
-from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215
+from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215, D0217
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -33,7 +33,7 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ConvTransformerModel_v5-AdamW-Focal0.0001_gamma3.2-D0215-B64-KFold8-input6-SAM-TTA20"
+COMMENT = "ConvTransformerModel_v5-AdamW-Focal0.001_gamma3.2-D0217-B64-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -243,7 +243,7 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0215(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0217(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
         model = ConvTransformerModel().cuda()
@@ -257,7 +257,7 @@ def main():
         ).cuda()"""
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         criterion = FocalLoss(gamma=3.2).cuda()
-        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
+        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-3)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)

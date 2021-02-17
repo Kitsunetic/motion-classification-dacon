@@ -46,7 +46,7 @@ def D0206_org(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoa
 def random_shift(x, p=0.5):
     if random.random() > p:
         return x
-        
+
     shift = random.randint(0, 600)
     return torch.roll(x, shift, dims=1)
 
@@ -452,6 +452,38 @@ class C0215(TensorDataset):
 
 def D0215(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
     data = np.load(data_dir / "0214.npz")
+    X_train = data["X_train"][:, :6]
+    Y_train = data["Y_train"]
+    X_test = data["X_test"][:, :6]
+
+    X_train = tensor(X_train, dtype=torch.float32)
+    Y_train = tensor(Y_train, dtype=torch.long)
+    X_test = tensor(X_test, dtype=torch.float32)
+    print(X_train.shape, Y_train.shape, X_test.shape)
+
+    # samples_per_cls
+    samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
+    print(samples_per_cls)
+
+    ds = C0215(X_train, Y_train)
+    ds_test = C0215(X_test)
+    dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
+    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
+
+    skf = StratifiedKFold(n_splits=8, shuffle=True, random_state=261342)
+    dl_list = []
+    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
+        ds_train = Subset(ds, train_idx)
+        ds_valid = Subset(ds, valid_idx)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+        dl_list.append((fold, dl_train, dl_valid))
+
+    return dl_list, dl_test, samples_per_cls
+
+
+def D0217(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
+    data = np.load(data_dir / "0201.npz")
     X_train = data["X_train"][:, :6]
     Y_train = data["Y_train"]
     X_test = data["X_test"][:, :6]
