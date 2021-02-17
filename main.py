@@ -33,11 +33,11 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ConvTransformerModel_v5-AdamW-Focal0.001_gamma3.2-D0217-B64-KFold8-input6-SAM-TTA20"
+COMMENT = "ConvTransformerModel_v6-AdamW-Focal0.001_gamma3.2-D0217-B100-KFold8-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 100
 NUM_CPUS = 8
 EPOCHS = 100
 
@@ -257,7 +257,7 @@ def main():
         ).cuda()"""
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         criterion = FocalLoss(gamma=3.2).cuda()
-        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-3)
+        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)
