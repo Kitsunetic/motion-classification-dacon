@@ -1,6 +1,6 @@
-from contextlib import redirect_stderr
+import matplotlib.pyplot as plt
+import seaborn as sns
 import math
-from networks.fctf import ConvTransformerModel
 import random
 from collections import defaultdict
 from datetime import datetime
@@ -14,12 +14,13 @@ import torch_optimizer
 from sklearn.metrics import classification_report, confusion_matrix, log_loss
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR, CosineAnnealingWarmRestarts
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from torch_poly_lr_decay import PolynomialLRDecay
 
 import networks as ww
-from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215, D0217
+from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215, D0217, D0219
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -33,18 +34,18 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ConvTransformerModel_v6-AdamW-Focal0.001_gamma3.2-D0217-B100-KFold8-input6-SAM-TTA20"
+COMMENT = "ECATF-AdamW-Focal0.001_gamma3.2-D0217-B200-KFold4-input6-SAM-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 100
+BATCH_SIZE = 200
 NUM_CPUS = 8
 EPOCHS = 100
 
 DO_KFOLD = True
 N_TTA = 20
 
-EARLYSTOP_PATIENCE = 20
+EARLYSTOP_PATIENCE = 10
 
 
 class Trainer:
@@ -76,6 +77,13 @@ class Trainer:
             threshold=1e-8,
             cooldown=0,
         )
+        # self.scheduler = CosineAnnealingLR(self.optimizer, T_max=20, eta_min=0, last_epoch=-1)
+        """self.scheduler = PolynomialLRDecay(
+            self.optimizer,
+            max_decay_steps=len(dl_train) * num_epochs // 2,
+            end_learning_rate=1e-6,
+            power=0.9,
+        )"""
         self.best_loss = math.inf
 
         self.earlystop_cnt = 0
@@ -105,6 +113,7 @@ class Trainer:
                 self.optimizer.first_step(zero_grad=True)
                 self.criterion(self.model(x_), y_).backward()
                 self.optimizer.second_step(zero_grad=True)
+                # self.scheduler.step()  # polynomial lr decay
 
                 self.loss.update(loss.item())
                 self.acc.update(y_, p_)
@@ -181,12 +190,15 @@ class Trainer:
         self.writer.add_scalars(self.exname + "/ll", ll_scalars, foldded_epoch)
 
         # Classification Report
-        report_train = classification_report(ys_train, torch.argmax(ps_train, dim=1), zero_division=0)
-        report_valid = classification_report(ys_valid, torch.argmax(ps_valid, dim=1), zero_division=0)
+        qs_train = torch.argmax(ps_train, dim=1)
+        qs_valid = torch.argmax(ps_valid, dim=1)
+        report_train = classification_report(ys_train, qs_train, zero_division=0)
+        report_valid = classification_report(ys_valid, qs_valid, zero_division=0)
         self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
         self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
         # LR scheduler
+        # self.scheduler.step()
         self.scheduler.step(self.val_loss)
 
         # Early Stop
@@ -195,15 +207,37 @@ class Trainer:
             self.earlystop_cnt = 0
 
             # Save Checkpoint
-            torch.save(self.model.state_dict(), self.expath / f"best-ckpt-{self.fold}.pth")
+            ckpt = {"model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "epoch": epoch}
+            torch.save(ckpt, self.expath / f"best-ckpt-{self.fold}.pth")
+
+            cm_train = pd.DataFrame(
+                confusion_matrix(ys_train, qs_train),
+                index=[k for k in range(61)],
+                columns=[k for k in range(61)],
+            )
+            cm_valid = pd.DataFrame(
+                confusion_matrix(ys_valid, qs_valid),
+                index=[k for k in range(61)],
+                columns=[k for k in range(61)],
+            )
+            plt.figure(figsize=(20, 20))
+            sns.heatmap(cm_train, annot=True, cbar=False)
+            plt.tight_layout()
+            plt.savefig(self.expath / f"cm-train-epoch{epoch:03d}.png")
+            plt.close()
+            plt.figure(figsize=(20, 20))
+            sns.heatmap(cm_valid, annot=True, cbar=False)
+            plt.tight_layout()
+            plt.savefig(self.expath / f"cm-valid-epoch{epoch:03d}.png")
+            plt.close()
         else:
             self.earlystop_cnt += 1
 
         # Last Cross Entropy
-        if epoch == 20:
+        """if epoch == 20:
             self.criterion = FocalLoss(gamma=2.0)
         elif epoch == 40:
-            self.criterion = nn.CrossEntropyLoss().cuda()
+            self.criterion = nn.CrossEntropyLoss().cuda()"""
 
     @torch.no_grad()
     def evaluate(self, dl):
@@ -218,6 +252,11 @@ class Trainer:
 
     @torch.no_grad()
     def submission(self, dl):
+        # Load best checkpoint
+        ckpt = torch.load(self.expath / f"best-ckpt-{self.fold}.pth")
+        self.model.load_state_dict(ckpt["model"])
+        self.model.eval()
+
         pss = []
         for _ in range(N_TTA):
             pss.append(self.evaluate(dl))
@@ -243,11 +282,12 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0217(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = ConvTransformerModel().cuda()
-        # model = ww.ECATF().cuda()
+        model = ww.ECATF().cuda()
+        # model = ww.TF_v1().cuda()
+        # model = ConvTransformerModel().cuda()
         """model = ww.RTFModel(
             n_resblocks=[8, 8],
             n_layers=[4, 4],
@@ -257,7 +297,7 @@ def main():
         ).cuda()"""
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         criterion = FocalLoss(gamma=3.2).cuda()
-        optimizer = ww.SAM(model.parameters(), AdamW, lr=1e-4)
+        optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)

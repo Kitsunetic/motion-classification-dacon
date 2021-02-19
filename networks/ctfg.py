@@ -7,7 +7,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn.modules.transformer import TransformerDecoder, TransformerDecoderLayer
 
 from .common import Activation, PADDING_MODE, cba3x3, conv3x3
-from .eca_tf import ECABasicBlock, ECALayer, PosEncoder
+from .eca_tf import ECABasicBlock, ECALayer, PositionalEncoder
 
 
 class CALayer(nn.Module):
@@ -90,7 +90,7 @@ class RTFG(nn.Module):
         self.rg = RG(channels, kernel_size, n_resblocks, reduction)
 
         if self.pos_encoder:
-            self.pe = PosEncoder(channels, addition="cat")
+            self.pe = PositionalEncoder(channels, addition="cat")
         elayer = TransformerEncoderLayer(
             d_model=channels,
             nhead=n_head,
@@ -137,7 +137,7 @@ class TFEncoderBlock(nn.Module):
 
         self.pe = None
         if pos_encoder:
-            self.pe = PosEncoder(d_model, addition=addition_mode)
+            self.pe = PositionalEncoder(d_model, addition=addition_mode)
         self.encoder = TransformerEncoder(
             encoder_layer=TransformerEncoderLayer(d_model=d_model, nhead=n_head),
             num_layers=n_layers,
