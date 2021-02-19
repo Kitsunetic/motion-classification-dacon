@@ -20,7 +20,7 @@ from tqdm import tqdm
 from torch_poly_lr_decay import PolynomialLRDecay
 
 import networks as ww
-from datasets import C0210, D0210, D0201_v1, D0206_org_v4_4, D0206_org_v4_5, D0214, D0215, D0217, D0219
+from datasets import D0219
 from utils import (
     AccuracyMeter,
     AverageMeter,
@@ -34,11 +34,11 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF-AdamW-Focal0.001_gamma3.2-D0217-B200-KFold4-input6-SAM-TTA20"
+COMMENT = "ResNet34-Focal-D0219-B100-KFold4-TTA20"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 200
+BATCH_SIZE = 100
 NUM_CPUS = 8
 EPOCHS = 100
 
@@ -168,10 +168,12 @@ class Trainer:
         foldded_epoch = self.fold * 1000 + epoch
         ys_train, ps_train = result_train
         ys_valid, ps_valid = result_valid
+        ps_train_ = torch.softmax(ps_train, dim=1)
+        ps_valid_ = torch.softmax(ps_valid, dim=1)
 
         # LogLoss
-        ll_train = log_loss(ys_train, torch.softmax(ps_train, dim=1))
-        ll_valid = log_loss(ys_valid, torch.softmax(ps_valid, dim=1))
+        ll_train = log_loss(ys_train, ps_train_)
+        ll_valid = log_loss(ys_valid, ps_valid_)
 
         now = datetime.now()
         print(
@@ -220,12 +222,12 @@ class Trainer:
                 index=[k for k in range(61)],
                 columns=[k for k in range(61)],
             )
-            plt.figure(figsize=(20, 20))
+            plt.figure(figsize=(24, 20))
             sns.heatmap(cm_train, annot=True, cbar=False)
             plt.tight_layout()
             plt.savefig(self.expath / f"cm-train-epoch{epoch:03d}.png")
             plt.close()
-            plt.figure(figsize=(20, 20))
+            plt.figure(figsize=(24, 20))
             sns.heatmap(cm_valid, annot=True, cbar=False)
             plt.tight_layout()
             plt.savefig(self.expath / f"cm-valid-epoch{epoch:03d}.png")
@@ -282,19 +284,11 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE)
+    dl_list, dl_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE, ssonly=False)
     # dl_list, dl_test = D0201_v1(DATA_DIR, BATCH_SIZE)
     for fold, dl_train, dl_valid in dl_list:
-        model = ww.ECATF().cuda()
-        # model = ww.TF_v1().cuda()
-        # model = ConvTransformerModel().cuda()
-        """model = ww.RTFModel(
-            n_resblocks=[8, 8],
-            n_layers=[4, 4],
-            n_head=[8, 8],
-            reduction=16,
-            pos_encoder=True,
-        ).cuda()"""
+        # model = ww.ECATF().cuda()
+        model = ww.ResNet34().cuda()
         # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         criterion = FocalLoss(gamma=3.2).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)

@@ -515,18 +515,26 @@ def D0217(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]
 
 
 class C0219(TensorDataset):
+    def __init__(self, *tensors, ssonly):
+        super().__init__(*tensors)
+
+        self.ssonly = ssonly
+
     def __getitem__(self, index):
         items = super().__getitem__(index)
 
         x_total = items[0]
+        x_total = self._augmentation(x_total)
         if len(items) == 2:
             y = items[1]
-            if y != 26:
-                x_total = self._augmentation(x_total)
+            if self.ssonly:
+                if y.item() == 26:
+                    y = torch.ones(1, dtype=torch.float)
+                else:
+                    y = torch.zeros(1, dtype=torch.float)
 
             return x_total, y
         else:
-            x_total = self._augmentation(x_total)
             return (x_total,)
 
     def _augmentation(self, x_total):
@@ -540,7 +548,7 @@ class C0219(TensorDataset):
         return x_total
 
 
-def D0219(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
+def D0219(data_dir, batch_size, ssonly) -> Tuple[List[Tuple[int, DataLoader, DataLoader]], DataLoader, List[int]]:
     data = np.load(data_dir / "0219.npz")
     X_train = data["X_train"]
     Y_train = data["Y_train"]
@@ -555,18 +563,18 @@ def D0219(data_dir, batch_size) -> Tuple[List[Tuple[int, DataLoader, DataLoader]
     samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
     print(samples_per_cls)
 
-    ds = C0219(X_train, Y_train)
-    ds_test = C0219(X_test)
-    dl_kwargs = dict(batch_size=batch_size, num_workers=6, pin_memory=True)
-    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False)
+    ds = C0219(X_train, Y_train, ssonly=ssonly)
+    ds_test = C0219(X_test, ssonly=ssonly)
+    dl_kwargs = dict(num_workers=6, pin_memory=True)
+    dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False, batch_size=2 * batch_size)
 
     skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=261342)
     dl_list = []
     for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
         ds_train = Subset(ds, train_idx)
         ds_valid = Subset(ds, valid_idx)
-        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True)
-        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False)
+        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True, batch_size=batch_size)
+        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False, batch_size=2 * batch_size)
         dl_list.append((fold, dl_train, dl_valid))
 
     return dl_list, dl_test, samples_per_cls

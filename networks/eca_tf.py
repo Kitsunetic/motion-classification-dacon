@@ -209,7 +209,7 @@ class PositionalEncoder(torch.nn.Module):
 
 
 class ECATF(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=61):
         super().__init__()
 
         self.conv1_list = nn.ModuleList([nn.Conv1d(1, 6, 7, stride=2, padding=3, padding_mode=PADDING_MODE) for _ in range(6)])
@@ -238,20 +238,6 @@ class ECATF(nn.Module):
             transpose=True,
         )
 
-        self.decoder1 = G((8 + 2) * C, 12 * C, stride=2, n_layers=1)
-        self.decoder2 = G(12 * C, 16 * C, stride=2, n_layers=1)
-        self.decoder3 = G(16 * C, 20 * C, stride=2, n_layers=1)
-        self.decoder4 = G(20 * C, 24 * C, stride=2, n_layers=1)
-        self.fc = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
-            nn.Flatten(),
-            nn.Dropout(p=0.05),
-            nn.Linear(24 * C, 4 * C),
-            Activation(),
-            nn.Dropout(p=0.05),
-            nn.Linear(4 * C, 61),
-        )
-
         self.zembedding = nn.Sequential(
             nn.Conv1d(12, 1 * C, 7, stride=2, padding=3, groups=2),
             nn.InstanceNorm1d(1 * C),
@@ -262,6 +248,24 @@ class ECATF(nn.Module):
             nn.MaxPool1d(kernel_size=3, stride=2, padding=1),
             Activation(),
         )
+
+        self.decoder1 = G((8 + 2) * C, 12 * C, stride=2, n_layers=1)
+        self.decoder2 = G(12 * C, 16 * C, stride=2, n_layers=1)
+        self.decoder3 = G(16 * C, 20 * C, stride=2, n_layers=1)
+        self.decoder4 = G(20 * C, 24 * C, stride=2, n_layers=1)
+
+        fc_modules = [
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Dropout(p=0.05),
+            nn.Linear(24 * C, 4 * C),
+            Activation(),
+            nn.Dropout(p=0.05),
+            nn.Linear(4 * C, num_classes),
+        ]
+        if num_classes == 1:
+            fc_modules.append(nn.Sigmoid())
+        self.fc = nn.Sequential(*fc_modules)
 
     def forward(self, input):
         x = input[:, :6, :]

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .common import Activation
+import math
 
 
 class BasicBlock(nn.Module):
@@ -95,6 +96,68 @@ class BottleNeck(nn.Module):
         return x
 
 
+class PositionalEncoder(torch.nn.Module):
+    def __init__(self, d_model, max_seq_len=600):
+        super().__init__()
+        self.d_model = d_model
+        pe = torch.zeros(max_seq_len, d_model)
+        for pos in range(max_seq_len):
+            for i in range(0, d_model, 2):
+                pe[pos, i] = math.sin(pos / (10000 ** ((2 * i) / d_model)))
+                pe[pos, i + 1] = math.cos(pos / (10000 ** ((2 * (i + 1)) / d_model)))
+        pe = pe.unsqueeze(0)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        with torch.no_grad():
+            x = x * math.sqrt(self.d_model)
+            seq_len = x.size(1)
+            pe = self.pe[:, :seq_len].view(1, seq_len, self.d_model)
+            x = x + pe
+            return x
+
+
+class TFEncoderBlock(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        n_head,
+        n_layers,
+        dim_feedforward=2048,
+        dropout=0.1,
+        max_seq_len=600,
+        transpose=True,
+    ):
+        super().__init__()
+
+        self.pe = PositionalEncoder(d_model=d_model, max_seq_len=max_seq_len)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_head,
+                dim_feedforward=dim_feedforward,
+                dropout=dropout,
+                activation="relu",
+            ),
+            num_layers=n_layers,
+            norm=nn.LayerNorm(d_model),
+        )
+
+        self.transpose = transpose
+
+    def forward(self, x):
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        x = self.pe(x)
+        x = self.encoder(x)
+
+        if self.transpose:
+            x = x.transpose_(1, 2)
+
+        return x
+
+
 class ResNet(nn.Module):
     def __init__(self, block, layers):
         super(ResNet, self).__init__()
@@ -106,6 +169,15 @@ class ResNet(nn.Module):
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             # nn.AvgPool1d(2),
+        )
+
+        self.tf = TFEncoderBlock(
+            d_model=64,
+            n_head=8,
+            n_layers=2,
+            dim_feedforward=2048,
+            dropout=0.1,
+            max_seq_len=600,
         )
 
         self.layer1 = self._make_layer(block, 64, layers[0])
@@ -123,6 +195,7 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
+        x = self.tf(x)
 
         x = self.layer1(x)
         x = self.layer2(x)

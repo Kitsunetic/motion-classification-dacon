@@ -24,7 +24,6 @@ from datasets import D0219
 from utils import (
     AccuracyMeter,
     AverageMeter,
-    BinaryAccuracyMeter,
     ClassBalancedLoss,
     FocalLoss,
     combine_submissions,
@@ -35,11 +34,11 @@ from utils import (
 LOGDIR = Path("log")
 RESULT_DIR = Path("results")
 DATA_DIR = Path("data")
-COMMENT = "ECATF-D0219-B100-KFold4-TTA20-SSONLY"
+COMMENT = "ECATF-CB-D0219-B64-KFold4-TTA20-S2"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 100
+BATCH_SIZE = 64
 NUM_CPUS = 8
 EPOCHS = 100
 
@@ -102,7 +101,7 @@ class Trainer:
         self.model.train()
 
         ys, ps = [], []
-        self.loss, self.aeloss, self.acc = AverageMeter(), AverageMeter(), BinaryAccuracyMeter()
+        self.loss, self.aeloss, self.acc = AverageMeter(), AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl), ncols=100, leave=False) as t:
             for x, y in dl:
                 x_, y_ = x.cuda(), y.cuda()
@@ -137,7 +136,7 @@ class Trainer:
         self.model.eval()
 
         pss = []
-        self.val_loss, self.val_aeloss, self.val_acc = AverageMeter(), AverageMeter(), BinaryAccuracyMeter()
+        self.val_loss, self.val_aeloss, self.val_acc = AverageMeter(), AverageMeter(), AccuracyMeter()
         with tqdm(total=len(dl) * N_TTA, ncols=100, leave=False) as t:
             for _ in range(N_TTA):
                 ys, ps = [], []
@@ -169,22 +168,34 @@ class Trainer:
         foldded_epoch = self.fold * 1000 + epoch
         ys_train, ps_train = result_train
         ys_valid, ps_valid = result_valid
-        ps_train, ps_valid = torch.round(ps_train), torch.round(ps_valid)
+
+        # LogLoss
+        ll_train = log_loss(ys_train, torch.softmax(ps_train, dim=1))
+        ll_valid = log_loss(ys_valid, torch.softmax(ps_valid, dim=1))
 
         now = datetime.now()
         print(
             f"[{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d} {epoch:03d}/{self.num_epochs:03d}:{self.fold}]",
             f"loss: {self.loss:.6f}:{self.val_loss:.6f}",
             f"acc: {self.acc*100:.2f}:{self.val_acc*100:.2f}%",
-            f"0_train: [{(ps_train == 0).sum().item()}/{len(ys_train)}], 1_train: [{(ps_train == 0).sum().item()}/{len(ys_train)}]",
-            f"0_valid: [{(ps_valid == 0).sum().item()}/{len(ys_valid)}], 1_valid: [{(ps_valid == 1).sum().item()}/{len(ys_valid)}]",
+            f"ll: {ll_train:.6f}:{ll_valid:.6f}",
         )
 
         # Tensorboard
         loss_scalars = {"loss": self.loss, "val_loss": self.val_loss}
         acc_scalars = {"acc": self.acc, "val_acc": self.val_acc}
+        ll_scalars = {"ll": ll_train, "val_ll": ll_valid}
         self.writer.add_scalars(self.exname + "/loss", loss_scalars, foldded_epoch)
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, foldded_epoch)
+        self.writer.add_scalars(self.exname + "/ll", ll_scalars, foldded_epoch)
+
+        # Classification Report
+        qs_train = torch.argmax(ps_train, dim=1)
+        qs_valid = torch.argmax(ps_valid, dim=1)
+        report_train = classification_report(ys_train, qs_train, zero_division=0)
+        report_valid = classification_report(ys_valid, qs_valid, zero_division=0)
+        self.writer.add_text(self.exname + "/CR_train", convert_markdown(report_train), foldded_epoch)
+        self.writer.add_text(self.exname + "/CR_valid", convert_markdown(report_valid), foldded_epoch)
 
         # LR scheduler
         # self.scheduler.step()
@@ -198,6 +209,27 @@ class Trainer:
             # Save Checkpoint
             ckpt = {"model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "epoch": epoch}
             torch.save(ckpt, self.expath / f"best-ckpt-{self.fold}.pth")
+
+            cm_train = pd.DataFrame(
+                confusion_matrix(ys_train, qs_train),
+                index=[k for k in range(61)],
+                columns=[k for k in range(61)],
+            )
+            cm_valid = pd.DataFrame(
+                confusion_matrix(ys_valid, qs_valid),
+                index=[k for k in range(61)],
+                columns=[k for k in range(61)],
+            )
+            plt.figure(figsize=(20, 20))
+            sns.heatmap(cm_train, annot=True, cbar=False)
+            plt.tight_layout()
+            plt.savefig(self.expath / f"cm-train-epoch{epoch:03d}.png")
+            plt.close()
+            plt.figure(figsize=(20, 20))
+            sns.heatmap(cm_valid, annot=True, cbar=False)
+            plt.tight_layout()
+            plt.savefig(self.expath / f"cm-valid-epoch{epoch:03d}.png")
+            plt.close()
         else:
             self.earlystop_cnt += 1
 
@@ -250,12 +282,12 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE, ssonly=True)
+    dl_ss_list, dl_ss_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE, ssonly=True)
+    dl_list, dl_test, samples_per_cls = D0219(DATA_DIR, BATCH_SIZE, ssonly=False)
     for fold, dl_train, dl_valid in dl_list:
-        model = ww.ECATF(num_classes=1).cuda()
-        # criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
+        model = ww.ECATF().cuda()
+        criterion = ClassBalancedLoss(samples_per_cls, 61, beta=0.9999, gamma=2.0).cuda()
         # criterion = FocalLoss(gamma=3.2).cuda()
-        criterion = nn.BCELoss().cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)

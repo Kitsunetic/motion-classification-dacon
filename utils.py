@@ -241,3 +241,12 @@ class ClassBalancedLoss(nn.Module):
 
         focal_loss /= torch.sum(labels)
         return focal_loss
+
+
+class CustomClassificationReport:
+    def __init__(self, num_classes):
+        pass
+
+    def __call__(self, pred, real):
+
+        pass
