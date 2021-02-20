@@ -559,6 +559,17 @@ def D0219(data_dir, batch_size, ssonly) -> Tuple[List[Tuple[int, DataLoader, Dat
     X_test = tensor(X_test, dtype=torch.float32)
     print(X_train.shape, Y_train.shape, X_test.shape)
 
+    idx26, idxother = [], []
+    for i, y in enumerate(Y_train):
+        if y.item() == 26:
+            idx26.append(i)
+        else:
+            idxother.append(i)
+    idx26 = random.sample(idx26, 64)
+    X_train = torch.cat([X_train[idx26], X_train[idxother]])
+    Y_train = torch.cat([Y_train[idx26], Y_train[idxother]])
+    print(X_train.shape, Y_train.shape, X_test.shape)
+
     # samples_per_cls
     samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
     print(samples_per_cls)
@@ -568,7 +579,7 @@ def D0219(data_dir, batch_size, ssonly) -> Tuple[List[Tuple[int, DataLoader, Dat
     dl_kwargs = dict(num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False, batch_size=2 * batch_size)
 
-    skf = StratifiedKFold(n_splits=4, shuffle=True, random_state=261342)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=261342)
     dl_list = []
     for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
         ds_train = Subset(ds, train_idx)

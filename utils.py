@@ -1,6 +1,7 @@
 import os
 import random
 import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -111,7 +112,7 @@ class AccuracyMeter:
         self.numel += y.shape[0]
 
         if self.numel > 0:
-            self.acc = self.correct / self.numel
+            self.acc = self.correct / self.numel * 100
 
     def __call__(self):
         return self.acc
@@ -243,10 +244,6 @@ class ClassBalancedLoss(nn.Module):
         return focal_loss
 
 
-class CustomClassificationReport:
-    def __init__(self, num_classes):
-        pass
-
-    def __call__(self, pred, real):
-
-        pass
+def strtime():
+    now = datetime.now()
+    return f"{now.month:02d}:{now.day:02d}-{now.hour:02d}:{now.minute:02d}"
