@@ -8,6 +8,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn.modules import padding
 
 from .common import PADDING_MODE, Activation, cba3x3, conv3x3
+from .nl import NLBlockND
 
 
 class TFEncoderBlock(nn.Module):
@@ -134,8 +135,10 @@ def ECABasicGroup(inchannels, channels, stride=1, downsample=None, k_size=3, n_l
     m = []
     m.append(ECABasicBlock(inchannels, channels, stride=stride, downsample=downsample, k_size=k_size))
 
-    for _ in range(1, n_layers):
+    for _ in range(1, n_layers - 1):
         m.append(ECABasicBlock(channels, channels, stride=1, downsample=downsample, k_size=k_size))
+    m.append(NLBlockND(channels, channels // 16, dimension=1))
+    m.append(ECABasicBlock(channels, channels, stride=1, downsample=downsample, k_size=k_size))
 
     return nn.Sequential(*m)
 
@@ -218,7 +221,7 @@ class ECATF(nn.Module):
         self.pool = nn.AvgPool1d(kernel_size=3, stride=2, padding=1)
 
         self.conv2 = nn.Conv1d(36, 72, 3, stride=1, padding=1, groups=2, padding_mode=PADDING_MODE)
-        self.norm2 = nn.BatchNorm1d(72)
+        self.norm2 = nn.InstanceNorm1d(72)
 
         C = 128
         G = ECABasicGroup
@@ -226,29 +229,30 @@ class ECATF(nn.Module):
         self.elayer1 = G(72, 1 * C, stride=1, n_layers=2)
         self.elayer2 = G(1 * C, 2 * C, stride=1, n_layers=3)
         self.elayer3 = G(2 * C, 4 * C, stride=2, n_layers=4)
-        self.elayer4 = G(4 * C, 8 * C, stride=1, n_layers=2)
+        self.elayer4 = G(4 * C, 8 * C, stride=2, n_layers=2)
 
         self.tf_encoder = TFEncoderBlock(
             d_model=8 * C,
             n_head=8,
             n_layers=8,
-            dim_feedforward=16 * C,
+            dim_feedforward=20 * C,
             dropout=0.1,
             max_seq_len=math.ceil(600 / (2 ** 3)),
             transpose=True,
         )
 
         self.decoder1 = G((8 + 2) * C, 12 * C, stride=2, n_layers=1)
-        self.decoder2 = G(12 * C, 16 * C, stride=2, n_layers=1)
-        self.decoder3 = G(16 * C, 20 * C, stride=2, n_layers=1)
+        self.decoder2 = G(12 * C, 16 * C, stride=2, n_layers=2)
+        self.decoder3 = G(16 * C, 20 * C, stride=2, n_layers=3)
+        self.decoder4 = G(20 * C, 24 * C, stride=2, n_layers=1)
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
-            # nn.Dropout(p=0.05),
-            nn.Linear(20 * C, 10 * C),
-            nn.ReLU(),
-            # nn.Dropout(p=0.05),
-            nn.Linear(10 * C, 61),
+            nn.Dropout(p=0.05),
+            nn.Linear(24 * C, 4 * C),
+            Activation(),
+            nn.Dropout(p=0.05),
+            nn.Linear(4 * C, 61),
         )
 
         self.zembedding = nn.Sequential(
@@ -273,7 +277,7 @@ class ECATF(nn.Module):
             xs.append(h)
         x = torch.cat(xs, dim=1)
         x = self.act(x)
-        x = self.pool(x)
+        # x = self.pool(x)
 
         x = self.conv2(x)
         x = self.norm2(x)
@@ -293,6 +297,7 @@ class ECATF(nn.Module):
         x = self.decoder1(x)
         x = self.decoder2(x)
         x = self.decoder3(x)
+        x = self.decoder4(x)
 
         x = self.fc(x)
 
