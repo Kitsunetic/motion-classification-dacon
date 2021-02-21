@@ -11,10 +11,9 @@ import pandas as pd
 import seaborn as sns
 import torch
 from sklearn.metrics import classification_report, confusion_matrix, log_loss
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, KFold
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset, TensorDataset
@@ -27,17 +26,16 @@ import networks as ww
 from utils import (
     AccuracyMeter,
     AverageMeter,
-    ClassBalancedLoss,
     FocalLoss,
     combine_submissions,
     generate_experiment_directory,
     strtime,
 )
 
-LOGDIR = Path("log2")
-RESULT_DIR = Path("results2")
+LOGDIR = Path("log-unknown")
+RESULT_DIR = Path("results-unknown")
 DATA_DIR = Path("data")
-COMMENT = "ECATF"
+COMMENT = "ECATF3"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
@@ -45,10 +43,25 @@ BATCH_SIZE = 64
 NUM_CPUS = 8
 EPOCHS = 300
 
+DO_KFOLD = True
 VAL_N_TTA = 10
 TEST_N_TTA = 50
 
 EARLYSTOP_PATIENCE = 10
+
+NUM_FOLDS = 4
+FOLD = 1
+
+
+class UniKLDiv(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        uniform = torch.softmax(torch.zeros(1, 60, dtype=torch.float32), dim=1)
+        self.register_buffer("uniform", uniform)
+
+    def forward(self, pred):
+        return torch.mean(-torch.log(torch.softmax(pred, dim=1) / self.uniform))
 
 
 class Trainer:
@@ -56,6 +69,7 @@ class Trainer:
         self,
         model: nn.Module,
         criterion: nn.Module,
+        criterion_uni: nn.Module,
         optimizer,
         writer: SummaryWriter,
         exname: str,
@@ -64,13 +78,14 @@ class Trainer:
     ):
         self.model = model
         self.criterion = criterion
+        self.criterion_uni = criterion_uni
         self.optimizer = optimizer
         self.writer = writer
         self.exname = exname
         self.expath = expath
         self.fold = fold
 
-    def fit(self, dl_train, dl_valid, num_epochs, start_epoch=1, checkpoint=None):
+    def fit(self, dl_train1, dl_valid1, dl_train2, dl_valid2, num_epochs, start_epoch=1, checkpoint=None):
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
             factor=0.5,
@@ -83,8 +98,10 @@ class Trainer:
         self.best_loss = math.inf
         self.epoch = start_epoch
         self.num_epochs = num_epochs
-        self.dl_train = dl_train
-        self.dl_valid = dl_valid
+        self.dl_train1 = dl_train1
+        self.dl_valid1 = dl_valid1
+        self.dl_train2 = dl_train2
+        self.dl_valid2 = dl_valid2
 
         if checkpoint is not None and Path(checkpoint).exists():
             print("Load state dict", checkpoint)
@@ -101,31 +118,31 @@ class Trainer:
             self.fepoch = self.fold * 1000 + self.epoch
             self.fsepoch = f"{self.fepoch:04d}"
 
-            self.train_loop()
-            self.valid_loop()
+            self.train_loop1()
+            self.valid_loop1()
+            self.train_loop2()
+            self.valid_loop2()
             self.callback()
 
             if self.earlystop_cnt > EARLYSTOP_PATIENCE:
                 print("[Early Stop] fold", self.fold)
                 break
 
-    def train_loop(self):
+    def train_loop1(self):
         self.model.train()
 
         ys, ps = [], []
         _loss, _acc = AverageMeter(), AccuracyMeter()
-        with tqdm(total=len(self.dl_train.dataset), ncols=100, leave=False, desc=f"{self.cepoch} train") as t:
-            for x, y in self.dl_train:
+        with tqdm(total=len(self.dl_train1.dataset), ncols=100, leave=False, desc=f"{self.cepoch} train1") as t:
+            for x, y in self.dl_train1:
                 x_, y_ = x.cuda(), y.cuda()
                 p_ = self.model(x_)
                 loss = self.criterion(p_, y_)
 
                 # SAM
                 loss.backward()
-                clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.first_step(zero_grad=True)
                 self.criterion(self.model(x_), y_).backward()
-                clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.second_step(zero_grad=True)
 
                 _loss.update(loss.item())
@@ -133,25 +150,57 @@ class Trainer:
                 ys.append(y)
                 ps.append(p_.detach().cpu())
 
-                t.set_postfix_str(f"loss: {loss.item():.6f} acc: {_acc():.2f}%", refresh=False)
+                t.set_postfix_str(f"loss:{loss.item():.6f} acc:{_acc():.2f}%", refresh=False)
                 t.update(len(y))
 
         self.tys = torch.cat(ys)
         self.tps = torch.cat(ps).softmax(dim=1)
-        self.tloss = _loss()
+        self.tloss1 = _loss()
 
-        self.tacc = (self.tys == torch.argmax(self.tps, dim=1)).sum().item() / len(self.tys) * 100
+        self.tacc1 = (self.tys == torch.argmax(self.tps, dim=1)).sum().item() / len(self.tys) * 100
+
+    def train_loop2(self):
+        self.model.train()
+
+        ps = []
+        _loss = AverageMeter()
+        correct, numel = 0, 0
+        with tqdm(total=len(self.dl_train2.dataset), ncols=100, leave=False, desc=f"{self.cepoch} train2") as t:
+            for (x,) in self.dl_train2:
+                x_ = x.cuda()
+                p_ = self.model(x_)
+                loss = self.criterion_uni(p_)
+
+                # SAM
+                loss.backward()
+                self.optimizer.first_step(zero_grad=True)
+                self.criterion_uni(self.model(x_)).backward()
+                self.optimizer.second_step(zero_grad=True)
+
+                _loss.update(loss.item())
+                ps.append(p_.detach().cpu())
+
+                correct += (torch.softmax(p_, dim=1) >= 0.5).sum().item()
+                numel += len(x)
+
+                t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
+                t.update(len(x))
+
+        self.tus = torch.cat(ps).softmax(dim=1)
+        self.tloss2 = _loss()
+        self.tacc2 = correct / numel * 100
 
     @torch.no_grad()
-    def valid_loop(self):
+    def valid_loop1(self):
         self.model.eval()
 
         pss = []
         _loss = AverageMeter()
-        with tqdm(total=len(self.dl_valid.dataset) * VAL_N_TTA, ncols=100, leave=False, desc=f"{self.cepoch} valid") as t:
+        with tqdm(total=len(self.dl_valid1.dataset) * VAL_N_TTA, ncols=100, leave=False, desc=f"{self.cepoch} valid1") as t:
             for _ in range(VAL_N_TTA):
                 ys, ps = [], []
-                for x, y in self.dl_valid:
+                correct, numel = 0, 0
+                for x, y in self.dl_valid1:
                     x_, y_ = x.cuda(), y.cuda()
                     p_ = self.model(x_)
 
@@ -161,59 +210,77 @@ class Trainer:
                     ys.append(y)
                     ps.append(p_.cpu())
 
-                    t.set_postfix_str(f"loss: {loss.item():.6f}", refresh=False)
+                    correct += (torch.argmax(p_, dim=1) == y_).sum().item()
+                    numel += len(x)
+
+                    t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
                     t.update(len(y))
 
                 pss.append(torch.cat(ps))
 
         self.vys = torch.cat(ys)
         self.vps = torch.stack(pss).softmax(dim=2).mean(dim=0)
-        self.vloss = _loss()
-        self.vacc = (self.vys == torch.argmax(self.vps, dim=1)).sum().item() / len(self.vys) * 100
+        self.vloss1 = _loss()
+        self.vacc1 = (self.vys == torch.argmax(self.vps, dim=1)).sum().item() / len(self.vys) * 100
+
+    @torch.no_grad()
+    def valid_loop2(self):
+        self.model.eval()
+
+        ps = []
+        _loss = AverageMeter()
+        correct, numel = 0, 0
+        with tqdm(total=len(self.dl_valid2.dataset), ncols=100, leave=False, desc=f"{self.cepoch} valid2") as t:
+            for (x,) in self.dl_valid2:
+                x_ = x.cuda()
+                p_ = self.model(x_)
+
+                loss = self.criterion_uni(p_)
+                _loss.update(loss.item())
+
+                ps.append(p_.detach().cpu())
+
+                correct += (torch.softmax(p_, dim=1) >= 0.5).sum().item()
+                numel += len(x)
+
+                t.set_postfix_str(f"loss: {loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
+                t.update(len(x))
+
+        self.vus = torch.cat(ps).softmax(dim=1)
+        self.vloss2 = _loss()
+        self.vacc2 = correct / numel * 100
 
     @torch.no_grad()
     def callback(self):
-        self.scheduler.step(self.vloss)
+        self.scheduler.step(self.vloss1)
 
         tas = torch.argmax(self.tps, dim=1)
         vas = torch.argmax(self.vps, dim=1)
 
-        np.savez_compressed("test.npz", tas=tas.numpy(), vas=vas.numpy(), tys=self.tys.numpy(), vys=self.vys.numpy())
-
-        # 26번에 대해 accuracy 따로 구하기
-        len_tys26 = (self.tys == 26).sum().item()
-        len_vys26 = (self.vys == 26).sum().item()
-        tacc26 = ((tas == 26) * (self.tys == 26)).sum().item() / len_tys26 * 100
-        taccoo = ((tas != 26) * (tas == self.tys)).sum().item() / (len(self.tys) - len_tys26) * 100
-        vacc26 = ((vas == 26) * (self.vys == 26)).sum().item() / len_vys26 * 100
-        vaccoo = ((vas != 26) * (vas == self.vys)).sum().item() / (len(self.vys) - len_vys26) * 100
-
-        # LogLoss
-        tll = log_loss(self.tys, self.tps)
-        vll = log_loss(self.vys, self.vps)
         print(
             f"[{strtime()} {self.cepoch}:{self.fold}]",
-            f"loss:{self.tloss:.6f}:{self.vloss:.6f}",
-            f"acc:{self.tacc:.2f}:{self.vacc:.2f}%",
-            f"acc26:{tacc26:.2f}:{vacc26:.2f}%",
-            f"accoo:{taccoo:.2f}:{vaccoo:.2f}%",
-            f"ll:{tll:.6f}:{vll:.6f}",
+            f"loss:{self.tloss1:.6f}:{self.vloss1:.6f}",
+            f"acc1:{self.tacc1:.2f}:{self.vacc1:.2f}%",
+            f"loss2:{self.tloss2:.6f}:{self.vloss2:.6f}",
+            f"acc2:{self.tacc2:.2f}:{self.vacc2:.2f}%",
         )
 
         # Tensorboard
-        loss_scalars = {"loss": self.tloss, "val_loss": self.vloss}
-        acc_scalars = {"acc": self.tacc, "val_acc": self.vacc}
-        ll_scalars = {"ll": tll, "val_ll": vll}
-        self.writer.add_scalars(self.exname + "/loss", loss_scalars, self.fepoch)
-        self.writer.add_scalars(self.exname + "/acc", acc_scalars, self.fepoch)
-        self.writer.add_scalars(self.exname + "/ll", ll_scalars, self.fepoch)
+        loss1_scalars = {"tloss1": self.tloss1, "vloss1": self.vloss2}
+        acc1_scalars = {"tacc1": self.tacc1, "vacc1": self.vacc1}
+        loss2_scalars = {"tloss2": self.tloss1, "vloss2": self.vloss2}
+        acc2_scalars = {"tacc2": self.tacc2, "vacc2": self.vacc2}
+        self.writer.add_scalars(self.exname + "/loss1", loss1_scalars, self.fepoch)
+        self.writer.add_scalars(self.exname + "/loss2", loss2_scalars, self.fepoch)
+        self.writer.add_scalars(self.exname + "/acc1", acc1_scalars, self.fepoch)
+        self.writer.add_scalars(self.exname + "/acc2", acc2_scalars, self.fepoch)
 
         # Classification Report
         self.classification_report(self.tys, tas, self.vys, vas)
 
-        if self.best_loss - self.vloss > 1e-8:
+        if self.best_loss - self.vloss1 > 1e-8:
             # Early Stop
-            self.best_loss = self.vloss
+            self.best_loss = self.vloss1
             self.earlystop_cnt = 0
 
             # Save Checkpoint
@@ -356,7 +423,9 @@ class MyDataset(TensorDataset):
         x_total = items[0]
         x_total = self._augmentation(x_total)
         if len(items) == 2:
-            return x_total, items[1]
+            y = items[1]
+
+            return x_total, y
         else:
             return (x_total,)
 
@@ -372,35 +441,39 @@ class MyDataset(TensorDataset):
 
 
 def load_dataset():
-    data = np.load(DATA_DIR / "known.npz")
-    X_train = data["X_train"]
-    Y_train = data["Y_train"]
+    data = np.load(DATA_DIR / "unknown.npz")
+    X_train1 = data["X_train1"]
+    Y_train1 = data["Y_train1"]
+    X_train2 = data["X_train2"]
     X_test = data["X_test"]
 
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    Y_train = torch.tensor(Y_train, dtype=torch.long)
+    X_train1 = torch.tensor(X_train1, dtype=torch.float32)
+    Y_train1 = torch.tensor(Y_train1, dtype=torch.long)
+    X_train2 = torch.tensor(X_train2, dtype=torch.float32)
     X_test = torch.tensor(X_test, dtype=torch.float32)
-    print(X_train.shape, Y_train.shape, X_test.shape)
+    print(X_train1.shape, Y_train1.shape, X_train2.shape, X_test.shape)
 
-    # samples_per_cls
-    samples_per_cls = [(Y_train == i).sum().item() for i in range(61)]
-    print(samples_per_cls)
-
-    ds = MyDataset(X_train, Y_train)
+    ds1 = MyDataset(X_train1, Y_train1)
+    ds2 = MyDataset(X_train2)
     ds_test = MyDataset(X_test)
     dl_kwargs = dict(num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False, batch_size=2 * BATCH_SIZE)
 
-    skf = StratifiedKFold(n_splits=6, shuffle=True, random_state=261342)
+    kf1 = StratifiedKFold(n_splits=6, shuffle=True, random_state=261342)
+    kf2 = KFold(n_splits=NUM_FOLDS, shuffle=True, random_state=261342)
     dl_list = []
-    for fold, (train_idx, valid_idx) in enumerate(skf.split(X_train, Y_train), 1):
-        ds_train = Subset(ds, train_idx)
-        ds_valid = Subset(ds, valid_idx)
-        dl_train = DataLoader(ds_train, **dl_kwargs, shuffle=True, batch_size=BATCH_SIZE)
-        dl_valid = DataLoader(ds_valid, **dl_kwargs, shuffle=False, batch_size=2 * BATCH_SIZE)
-        dl_list.append((fold, dl_train, dl_valid))
+    for (train_idx1, valid_idx1), (train_idx2, valid_idx2) in zip(kf1.split(X_train1, Y_train1), kf2.split(X_train2)):
+        ds_train1 = Subset(ds1, train_idx1)
+        ds_valid1 = Subset(ds1, valid_idx1)
+        dl_train1 = DataLoader(ds_train1, **dl_kwargs, shuffle=True, batch_size=BATCH_SIZE)
+        dl_valid1 = DataLoader(ds_valid1, **dl_kwargs, shuffle=False, batch_size=2 * BATCH_SIZE)
+        ds_train2 = Subset(ds2, train_idx2)
+        ds_valid2 = Subset(ds2, valid_idx2)
+        dl_train2 = DataLoader(ds_train2, **dl_kwargs, shuffle=True, batch_size=BATCH_SIZE)
+        dl_valid2 = DataLoader(ds_valid2, **dl_kwargs, shuffle=True, batch_size=BATCH_SIZE)
+        dl_list.append((dl_train1, dl_valid1, dl_train2, dl_valid2))
 
-    return dl_list, dl_test, samples_per_cls
+    return dl_list, dl_test
 
 
 def main():
@@ -408,18 +481,17 @@ def main():
     writer = SummaryWriter(LOGDIR)
 
     pss = []
-    dl_list, dl_test, samples_per_cls = load_dataset()
-    for fold, dl_train, dl_valid in dl_list:
-        model = ww.ecatf34().cuda()
-        criterion = FocalLoss(gamma=2.0).cuda()
-        optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
+    dl_list, dl_test = load_dataset()
+    dl_train1, dl_valid1, dl_train2, dl_valid2 = dl_list[FOLD - 1]
 
-        trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
-        trainer.fit(dl_train, dl_valid, EPOCHS)
-        pss.append(trainer.submission(dl_test))
+    model = ww.ecatf34().cuda()
+    criterion = FocalLoss(gamma=2.0).cuda()
+    criterion_uni = UniKLDiv().cuda()
+    optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
 
-    # submission 파일들 합치기
-    combine_submissions(pss, EXPATH)
+    trainer = Trainer(model, criterion, criterion_uni, optimizer, writer, EXNAME, EXPATH, FOLD)
+    trainer.fit(dl_train1, dl_valid1, dl_train2, dl_valid2, EPOCHS)
+    pss.append(trainer.submission(dl_test))
 
 
 if __name__ == "__main__":
