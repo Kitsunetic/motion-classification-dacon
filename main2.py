@@ -41,7 +41,7 @@ COMMENT = "ECATF5"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 256
+BATCH_SIZE = 150
 NUM_CPUS = 8
 EPOCHS = 300
 
@@ -365,17 +365,17 @@ class MyDataset(TensorDataset):
             return (x_total,)
 
     def _augmentation(self, x_total):
-        x = x_total[:6]
-        x_deriv = x_total[6:]
+        x = x_total[:8]
+        x_deriv = x_total[8:]
         x = random_shift(x)
         x = random_sin(x, power=0.7)
         x = random_cos(x, power=0.7)
-        x = random_gaussian(x, ksize=3, sigma=(0.01, 1))
+        # x = random_gaussian(x, ksize=3, sigma=(0.01, 1))
         return torch.cat([x, x_deriv], dim=0)
 
 
 def load_dataset():
-    data = np.load(DATA_DIR / "known.npz")
+    data = np.load(DATA_DIR / "0222_blur.npz")
     X_train = data["X_train"]
     Y_train = data["Y_train"]
     X_test = data["X_test"]

@@ -1,14 +1,9 @@
 import math
-from tokenize import group
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.nn.modules import padding
-from torch.nn.modules.batchnorm import BatchNorm1d
-from torch.nn.modules.conv import Conv1d
-
-from .common import Activation, conv3x3, cba3x3
 
 
 class ECALayer(nn.Module):
@@ -39,10 +34,10 @@ class ECABasicBlock(nn.Module):
     def __init__(self, inchannels, channels, stride=1, downsample=None, k_size=3):
         super().__init__()
 
-        self.conv1 = conv3x3(inchannels, channels, stride)
+        self.conv1 = nn.Conv1d(inchannels, channels, 3, stride=stride, padding=1)
         self.bn1 = nn.BatchNorm1d(channels)
-        self.act = Activation()
-        self.conv2 = conv3x3(channels, channels)
+        self.act = nn.ELU(inplace=True)
+        self.conv2 = nn.Conv1d(channels, channels, 3, padding=1)
         self.bn2 = nn.BatchNorm1d(channels)
         self.eca = ECALayer(k_size)
         self.downsample = downsample
@@ -72,33 +67,6 @@ class ECABasicBlock(nn.Module):
         return x
 
 
-class InputLayer(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.conv1_list = nn.ModuleList([nn.Conv1d(1, 5, 7, stride=2, padding=3, padding_mode="circular") for _ in range(8)])
-        self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(5) for _ in range(8)])
-        self.act = Activation()
-
-        self.conv2 = nn.Conv1d(40, 72, 3, padding=1, groups=2, padding_mode="circular")
-        self.norm2 = nn.InstanceNorm1d(72)
-
-    def forward(self, x):
-        xs = []
-        for i in range(8):
-            h = self.conv1_list[i](x[:, i : i + 1])
-            h = self.norm1_list[i](h)
-            xs.append(h)
-        x = torch.cat(xs, dim=1)
-        x = self.act(x)
-
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = self.act(x)
-
-        return x
-
-
 class PosEncoder(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=600):
         super().__init__()
@@ -122,8 +90,15 @@ class ECATF(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.conv1 = InputLayer()
-        self.elayer1 = nn.Sequential(ECABasicBlock(72, 128), ECABasicBlock(128, 128))
+        self.conv = nn.Sequential(
+            nn.Conv1d(24, 120, 7, stride=1, padding=3, groups=3),
+            nn.InstanceNorm1d(120),
+            nn.ELU(inplace=True),
+            nn.Conv1d(120, 128, 3, stride=1, padding=1),
+            nn.BatchNorm1d(128),
+            nn.ELU(inplace=True),
+        )
+        self.elayer1 = nn.Sequential(ECABasicBlock(128, 128), ECABasicBlock(128, 128))
         self.elayer2 = nn.Sequential(ECABasicBlock(128, 256), ECABasicBlock(256, 256))
         self.elayer3 = nn.Sequential(ECABasicBlock(256, 512, stride=2))
         self.elayer4 = nn.Sequential(ECABasicBlock(512, 1024, stride=2), nn.AvgPool1d(2))
@@ -146,13 +121,13 @@ class ECATF(nn.Module):
             nn.Flatten(),
             nn.Dropout(p=0.05),
             nn.Linear(4094, 1024),
-            Activation(),
+            nn.ELU(inplace=True),
             nn.Dropout(p=0.05),
             nn.Linear(1024, 61),
         )
 
     def forward(self, x):
-        x = self.conv1(x)
+        x = self.conv(x)
 
         x = self.elayer1(x)
         x = self.elayer2(x)
