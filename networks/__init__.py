@@ -1,5 +1,5 @@
 from .basic import BasicConv
-from .eca_tf import ECATF, ecatf18, ecatf34, ecatf50, ecatf101, ecatf152
+from .eca_tf import ECATF
 from .fctf import ConvTransformerModel
 from .legacy_resnet import LegacyResNet18, LegacyResNet34, LegacyResNet50, LegacyResNet101, LegacyResNet152
 from .resnest import resnest50, resnest101, resnest200, resnest269

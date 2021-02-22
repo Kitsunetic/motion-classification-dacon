@@ -37,11 +37,11 @@ from utils import (
 LOGDIR = Path("log2")
 RESULT_DIR = Path("results2")
 DATA_DIR = Path("data")
-COMMENT = "ECATF"
+COMMENT = "ECATF5"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 300
 
@@ -133,7 +133,7 @@ class Trainer:
                 ys.append(y)
                 ps.append(p_.detach().cpu())
 
-                t.set_postfix_str(f"loss: {loss.item():.6f} acc: {_acc():.2f}%", refresh=False)
+                t.set_postfix_str(f"loss:{loss.item():.6f} acc:{_acc():.2f}%", refresh=False)
                 t.update(len(y))
 
         self.tys = torch.cat(ys)
@@ -151,6 +151,7 @@ class Trainer:
         with tqdm(total=len(self.dl_valid.dataset) * VAL_N_TTA, ncols=100, leave=False, desc=f"{self.cepoch} valid") as t:
             for _ in range(VAL_N_TTA):
                 ys, ps = [], []
+                correct, numel = 0, 0
                 for x, y in self.dl_valid:
                     x_, y_ = x.cuda(), y.cuda()
                     p_ = self.model(x_)
@@ -161,7 +162,10 @@ class Trainer:
                     ys.append(y)
                     ps.append(p_.cpu())
 
-                    t.set_postfix_str(f"loss: {loss.item():.6f}", refresh=False)
+                    correct += (torch.argmax(p_, dim=1) == y_).sum().item()
+                    numel += len(x)
+
+                    t.set_postfix_str(f"loss:{loss.item():.6f} acc:{correct/numel*100:.2f}", refresh=False)
                     t.update(len(y))
 
                 pss.append(torch.cat(ps))
@@ -211,9 +215,9 @@ class Trainer:
         # Classification Report
         self.classification_report(self.tys, tas, self.vys, vas)
 
-        if self.best_loss - self.vloss > 1e-8:
+        if self.best_loss - vll > 1e-8:
             # Early Stop
-            self.best_loss = self.vloss
+            self.best_loss = vll
             self.earlystop_cnt = 0
 
             # Save Checkpoint
@@ -410,8 +414,8 @@ def main():
     pss = []
     dl_list, dl_test, samples_per_cls = load_dataset()
     for fold, dl_train, dl_valid in dl_list:
-        model = ww.ecatf34().cuda()
-        criterion = FocalLoss(gamma=2.0).cuda()
+        model = ww.ECATF().cuda()
+        criterion = FocalLoss(gamma=3.2).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)

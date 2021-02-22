@@ -39,7 +39,7 @@ COMMENT = "ECATF3"
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 NUM_CPUS = 8
 EPOCHS = 300
 
@@ -51,6 +51,8 @@ EARLYSTOP_PATIENCE = 10
 
 NUM_FOLDS = 4
 FOLD = 1
+
+CORRECT_THRESHOLD = 0.6
 
 
 class UniKLDiv(nn.Module):
@@ -150,7 +152,7 @@ class Trainer:
                 ys.append(y)
                 ps.append(p_.detach().cpu())
 
-                t.set_postfix_str(f"loss:{loss.item():.6f} acc:{_acc():.2f}%", refresh=False)
+                t.set_postfix_str(f"loss:{loss.item():.6f} acc:{_acc():5.2f}%", refresh=False)
                 t.update(len(y))
 
         self.tys = torch.cat(ys)
@@ -180,10 +182,10 @@ class Trainer:
                 _loss.update(loss.item())
                 ps.append(p_.detach().cpu())
 
-                correct += (torch.softmax(p_, dim=1) >= 0.5).sum().item()
+                correct += (torch.argmax(torch.softmax(p_, dim=1), dim=1) < CORRECT_THRESHOLD).sum().item()
                 numel += len(x)
 
-                t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
+                t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:5.2f}%", refresh=False)
                 t.update(len(x))
 
         self.tus = torch.cat(ps).softmax(dim=1)
@@ -213,7 +215,7 @@ class Trainer:
                     correct += (torch.argmax(p_, dim=1) == y_).sum().item()
                     numel += len(x)
 
-                    t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
+                    t.set_postfix_str(f"loss:{loss.item():.6f}, acc:{correct/numel*100:5.2f}%", refresh=False)
                     t.update(len(y))
 
                 pss.append(torch.cat(ps))
@@ -240,10 +242,10 @@ class Trainer:
 
                 ps.append(p_.detach().cpu())
 
-                correct += (torch.softmax(p_, dim=1) >= 0.5).sum().item()
+                correct += (torch.argmax(torch.softmax(p_, dim=1), dim=1) < CORRECT_THRESHOLD).sum().item()
                 numel += len(x)
 
-                t.set_postfix_str(f"loss: {loss.item():.6f}, acc:{correct/numel*100:.2f}%", refresh=False)
+                t.set_postfix_str(f"loss: {loss.item():.6f}, acc:{correct/numel*100:5.2f}%", refresh=False)
                 t.update(len(x))
 
         self.vus = torch.cat(ps).softmax(dim=1)
@@ -260,9 +262,9 @@ class Trainer:
         print(
             f"[{strtime()} {self.cepoch}:{self.fold}]",
             f"loss:{self.tloss1:.6f}:{self.vloss1:.6f}",
-            f"acc1:{self.tacc1:.2f}:{self.vacc1:.2f}%",
+            f"acc1:{self.tacc1:5.2f}:{self.vacc1:5.2f}%",
             f"loss2:{self.tloss2:.6f}:{self.vloss2:.6f}",
-            f"acc2:{self.tacc2:.2f}:{self.vacc2:.2f}%",
+            f"acc2:{self.tacc2:5.2f}:{self.vacc2:5.2f}%",
         )
 
         # Tensorboard
@@ -310,7 +312,7 @@ class Trainer:
 
     def confusion_matrix(self, tys, tps, vys, vps):
         tcm, vcm = confusion_matrix(tys, tps), confusion_matrix(vys, vps)
-        idx = [k for k in range(61)]
+        idx = [k for k in range(60)]
         tcm = pd.DataFrame(np.ma.masked_greater(tcm, 100), index=idx, columns=idx)
         vcm = pd.DataFrame(np.ma.masked_greater(vcm, 100), index=idx, columns=idx)
         plt.figure(figsize=(24, 20))
@@ -484,7 +486,7 @@ def main():
     dl_list, dl_test = load_dataset()
     dl_train1, dl_valid1, dl_train2, dl_valid2 = dl_list[FOLD - 1]
 
-    model = ww.ecatf34().cuda()
+    model = ww.ECATF().cuda()
     criterion = FocalLoss(gamma=2.0).cuda()
     criterion_uni = UniKLDiv().cuda()
     optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
