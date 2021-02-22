@@ -91,10 +91,10 @@ class ECATF(nn.Module):
         super().__init__()
 
         self.conv = nn.Sequential(
-            nn.Conv1d(24, 120, 7, stride=1, padding=3, groups=24),
-            nn.InstanceNorm1d(120),
+            nn.Conv1d(8, 80, 7, stride=1, padding=3, groups=8),
+            nn.InstanceNorm1d(80),
             nn.ELU(inplace=True),
-            nn.Conv1d(120, 128, 3, stride=1, padding=1),
+            nn.Conv1d(80, 128, 3, stride=1, padding=1),
             nn.BatchNorm1d(128),
             nn.ELU(inplace=True),
         )
@@ -127,7 +127,7 @@ class ECATF(nn.Module):
         )
 
     def forward(self, x):
-        x = self.conv(x)
+        x = self.conv(x[:, :8])
 
         x = self.elayer1(x)
         x = self.elayer2(x)
