@@ -177,8 +177,6 @@ class Trainer:
 
     @torch.no_grad()
     def callback(self):
-        self.scheduler.step(self.vloss)
-
         tas = torch.argmax(self.tps, dim=1)
         vas = torch.argmax(self.vps, dim=1)
 
@@ -214,6 +212,8 @@ class Trainer:
 
         # Classification Report
         self.classification_report(self.tys, tas, self.vys, vas)
+
+        self.scheduler.step(vll)
 
         if self.best_loss - vll > 1e-8:
             # Early Stop
@@ -368,11 +368,10 @@ class MyDataset(TensorDataset):
         x = x_total[:6]
         x_deriv = x_total[6:]
         x = random_shift(x)
-        x = random_sin(x, power=0.5)
-        x = random_cos(x, power=0.5)
-        x = random_gaussian(x, ksize=3, sigma=(0.01, 0.2))
-        x_total = torch.cat([x, x_deriv], dim=0)
-        return x_total
+        x = random_sin(x, power=0.7)
+        x = random_cos(x, power=0.7)
+        x = random_gaussian(x, ksize=3, sigma=(0.01, 1))
+        return torch.cat([x, x_deriv], dim=0)
 
 
 def load_dataset():

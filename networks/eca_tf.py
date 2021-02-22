@@ -77,7 +77,7 @@ class InputLayer(nn.Module):
         super().__init__()
 
         self.conv1_list = nn.ModuleList([nn.Conv1d(1, 5, 7, stride=2, padding=3, padding_mode="circular") for _ in range(8)])
-        self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(5) for _ in range(6)])
+        self.norm1_list = nn.ModuleList([nn.InstanceNorm1d(5) for _ in range(8)])
         self.act = Activation()
 
         self.conv2 = nn.Conv1d(40, 72, 3, padding=1, groups=2, padding_mode="circular")
@@ -85,7 +85,7 @@ class InputLayer(nn.Module):
 
     def forward(self, x):
         xs = []
-        for i in range(6):
+        for i in range(8):
             h = self.conv1_list[i](x[:, i : i + 1])
             h = self.norm1_list[i](h)
             xs.append(h)
