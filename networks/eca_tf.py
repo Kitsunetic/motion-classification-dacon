@@ -91,7 +91,7 @@ class ECATF(nn.Module):
         super().__init__()
 
         self.conv = nn.Sequential(
-            nn.Conv1d(24, 120, 7, stride=1, padding=3, groups=3),
+            nn.Conv1d(24, 120, 7, stride=1, padding=3, groups=24),
             nn.InstanceNorm1d(120),
             nn.ELU(inplace=True),
             nn.Conv1d(120, 128, 3, stride=1, padding=1),
