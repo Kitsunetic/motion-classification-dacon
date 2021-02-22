@@ -203,9 +203,9 @@ class Trainer:
         )
 
         # Tensorboard
-        loss_scalars = {"loss": self.tloss, "val_loss": self.vloss}
-        acc_scalars = {"acc": self.tacc, "val_acc": self.vacc}
-        ll_scalars = {"ll": tll, "val_ll": vll}
+        loss_scalars = {"tloss": self.tloss, "vloss": self.vloss}
+        acc_scalars = {"tacc": self.tacc, "vacc": self.vacc}
+        ll_scalars = {"tll": tll, "vll": vll}
         self.writer.add_scalars(self.exname + "/loss", loss_scalars, self.fepoch)
         self.writer.add_scalars(self.exname + "/acc", acc_scalars, self.fepoch)
         self.writer.add_scalars(self.exname + "/ll", ll_scalars, self.fepoch)
@@ -414,7 +414,7 @@ def main():
     dl_list, dl_test, samples_per_cls = load_dataset()
     for fold, dl_train, dl_valid in dl_list:
         model = ww.ECATF().cuda()
-        criterion = FocalLoss(gamma=3.2).cuda()
+        criterion = FocalLoss(gamma=2.4).cuda()
         optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
