@@ -34,21 +34,21 @@ from utils import (
     strtime,
 )
 
-LOGDIR = Path("log2")
-RESULT_DIR = Path("results2")
+LOGDIR = Path("log3/jamm")
+RESULT_DIR = Path("results3/jamm")
 DATA_DIR = Path("data")
-COMMENT = "ECATF5"
+COMMENT = ""
 
 EXPATH, EXNAME = generate_experiment_directory(RESULT_DIR, COMMENT)
 
-BATCH_SIZE = 150
+BATCH_SIZE = 512
 NUM_CPUS = 8
 EPOCHS = 300
 
-VAL_N_TTA = 10
-TEST_N_TTA = 50
+VAL_N_TTA = 1
+TEST_N_TTA = 1
 
-EARLYSTOP_PATIENCE = 10
+EARLYSTOP_PATIENCE = 50
 
 
 class Trainer:
@@ -74,7 +74,7 @@ class Trainer:
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
             factor=0.5,
-            patience=3,
+            patience=5,
             verbose=True,
             threshold=1e-8,
             cooldown=0,
@@ -120,13 +120,17 @@ class Trainer:
                 p_ = self.model(x_)
                 loss = self.criterion(p_, y_)
 
-                # SAM
+                self.optimizer.zero_grad()
                 loss.backward()
+                self.optimizer.step()
+
+                # SAM
+                """loss.backward()
                 clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.first_step(zero_grad=True)
                 self.criterion(self.model(x_), y_).backward()
                 clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.second_step(zero_grad=True)
+                self.optimizer.second_step(zero_grad=True)"""
 
                 _loss.update(loss.item())
                 _acc.update(y_, p_)
@@ -211,7 +215,7 @@ class Trainer:
         self.writer.add_scalars(self.exname + "/ll", ll_scalars, self.fepoch)
 
         # Classification Report
-        self.classification_report(self.tys, tas, self.vys, vas)
+        # self.classification_report(self.tys, tas, self.vys, vas)
 
         self.scheduler.step(vll)
 
@@ -232,8 +236,8 @@ class Trainer:
             torch.save(ckpt, self.expath / f"best-ckpt-{self.fold}.pth")
 
             # Confusion Matrix
-            if self.epoch > 5:
-                self.confusion_matrix(self.tys, tas, self.vys, vas)
+            """if self.epoch > 5:
+                self.confusion_matrix(self.tys, tas, self.vys, vas)"""
         else:
             self.earlystop_cnt += 1
 
@@ -303,8 +307,8 @@ class Trainer:
 
 @torch.no_grad()
 def random_shift(x, p=0.5):
-    if random.random() > p:
-        return x
+    #if random.random() > p:
+    #    return x
 
     shift = random.randint(0, 600)
     return torch.roll(x, shift, dims=1)
@@ -357,32 +361,30 @@ class MyDataset(TensorDataset):
     def __getitem__(self, index):
         items = super().__getitem__(index)
 
-        x_total = items[0]
-        x_total = self._augmentation(x_total)
-        if len(items) == 2:
-            return x_total, items[1]
-        else:
-            return (x_total,)
+        x = items[0]
+        y = items[1]
+        if y.item() != 26:
+            x = self._augmentation(x)
 
-    def _augmentation(self, x_total):
-        x = x_total[:8]
-        x_deriv = x_total[8:]
+        return x, y
+
+    def _augmentation(self, x):
         x = random_shift(x)
-        x = random_sin(x, power=0.7)
-        x = random_cos(x, power=0.7)
+        # x = random_sin(x, power=0.7)
+        # x = random_cos(x, power=0.7)
         # x = random_gaussian(x, ksize=3, sigma=(0.01, 1))
-        return torch.cat([x, x_deriv], dim=0)
+        return x
 
 
 def load_dataset():
-    data = np.load(DATA_DIR / "0222_blur.npz")
+    data = np.load(DATA_DIR / "jamm.npz")
     X_train = data["X_train"]
     Y_train = data["Y_train"]
     X_test = data["X_test"]
 
-    X_train = torch.tensor(X_train, dtype=torch.float32)
+    X_train = torch.tensor(X_train, dtype=torch.float32).transpose(1, 2)
     Y_train = torch.tensor(Y_train, dtype=torch.long)
-    X_test = torch.tensor(X_test, dtype=torch.float32)
+    X_test = torch.tensor(X_test, dtype=torch.float32).transpose(1, 2)
     print(X_train.shape, Y_train.shape, X_test.shape)
 
     # samples_per_cls
@@ -390,7 +392,7 @@ def load_dataset():
     print(samples_per_cls)
 
     ds = MyDataset(X_train, Y_train)
-    ds_test = MyDataset(X_test)
+    ds_test = TensorDataset(X_test)
     dl_kwargs = dict(num_workers=6, pin_memory=True)
     dl_test = DataLoader(ds_test, **dl_kwargs, shuffle=False, batch_size=2 * BATCH_SIZE)
 
@@ -413,9 +415,12 @@ def main():
     pss = []
     dl_list, dl_test, samples_per_cls = load_dataset()
     for fold, dl_train, dl_valid in dl_list:
-        model = ww.ECATF().cuda()
-        criterion = FocalLoss(gamma=2.4).cuda()
-        optimizer = ww.SAM(model.parameters(), AdamW, lr=0.0001)
+        # model = ww.ECATF().cuda()
+        model = ww.SimpleCNN().cuda()
+        # criterion = FocalLoss(gamma=2.4).cuda()
+        criterion = nn.CrossEntropyLoss().cuda()
+        optimizer = AdamW(model.parameters(), lr=0.001)
+        # optimizer = ww.SAM(model.parameters(), AdamW, lr=0.001)
 
         trainer = Trainer(model, criterion, optimizer, writer, EXNAME, EXPATH, fold)
         trainer.fit(dl_train, dl_valid, EPOCHS)

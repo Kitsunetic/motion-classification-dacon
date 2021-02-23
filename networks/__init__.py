@@ -8,3 +8,4 @@ from .sam import SAM
 from .scae import SCAE
 from .tf import TF_v1
 from .transformer import TransformerModel_v1, TransformerModel_v2, TransformerModel_v3, TransformerModel_v4
+from .jamm import SimpleCNN
