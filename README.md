@@ -2,7 +2,8 @@
 
 ![](https://dacon.s3.ap-northeast-2.amazonaws.com/competition/235689/header_background.jpeg)
 
-https://dacon.io/competitions/official/235689
+* 아이디어 설명: https://www.notion.so/AI-54065ab4da62480f9ea595373c6f6454
+* dacon 소스코드 요약본: https://dacon.io/competitions/official/235689
 
 2021.01.11 ~ 2021.02.22  
 public 18위 0.52696, private 21위 0.62167
